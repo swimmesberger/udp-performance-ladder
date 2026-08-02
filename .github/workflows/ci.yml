@@ -52,7 +52,7 @@ jobs:
           LISTEN=$((20000 + RANDOM % 10000))
           SINK=$((30000 + RANDOM % 10000))
 
-          "$BENCH" sink --listen $SINK > sink.log 2>&1 &
+          "$BENCH" sink --listen $SINK --duration 8 > sink.log 2>&1 &
           SINK_PID=$!
           "$FWD" --listen $LISTEN --to 127.0.0.1:$SINK > fwd.log 2>&1 &
           FWD_PID=$!
@@ -60,9 +60,8 @@ jobs:
 
           "$BENCH" send --target 127.0.0.1:$LISTEN --size 32 --rate 20000 --duration 3
 
-          sleep 1
-          kill -INT $SINK_PID
-          wait $SINK_PID || true
+          # the sink exits on its own after its 8 s window and prints the summary
+          wait $SINK_PID
           kill $FWD_PID || true
 
           echo "--- forwarder ---"; cat fwd.log

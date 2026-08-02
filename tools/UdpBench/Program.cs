@@ -29,12 +29,16 @@ static int PrintUsage()
         """
         usage:
           udpbench send --target <host:port> [--size <bytes>] [--rate <pps>] [--duration <seconds>]
-          udpbench sink --listen <port>
+          udpbench sink --listen <port> [--duration <seconds>]
 
         send options:
           --size      UDP payload bytes, minimum 8 (default 32)
           --rate      packets per second; 0 = unthrottled (default 0)
           --duration  seconds to run; 0 = until Ctrl+C (default 10)
+
+        sink options:
+          --duration  seconds to run before printing the summary;
+                      0 = until Ctrl+C (default 0)
         """);
     return 1;
 }
@@ -138,6 +142,7 @@ static int RunSend(string[] args)
 static int RunSink(string[] args)
 {
     int port = 6000;
+    int durationSeconds = 0;
 
     for (int i = 0; i < args.Length; i++)
     {
@@ -145,6 +150,9 @@ static int RunSink(string[] args)
         {
             case "--listen":
                 port = int.Parse(args[++i]);
+                break;
+            case "--duration":
+                durationSeconds = int.Parse(args[++i]);
                 break;
             default:
                 Console.Error.WriteLine($"unknown argument '{args[i]}'");
@@ -154,6 +162,10 @@ static int RunSink(string[] args)
 
     using var socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
     socket.ReceiveBufferSize = 8 << 20;
+    // On Linux, closing the socket from another thread does not reliably
+    // wake a blocked synchronous Receive, so the loop polls with a short
+    // timeout instead of blocking forever.
+    socket.ReceiveTimeout = 250;
     socket.Bind(new IPEndPoint(IPAddress.Any, port));
 
     long packets = 0;
@@ -188,14 +200,27 @@ static int RunSink(string[] args)
     { IsBackground = true };
     reporter.Start();
 
-    Console.WriteLine($"sink listening on :{port}, Ctrl+C for summary");
+    Console.WriteLine(
+        $"sink listening on :{port}, " +
+        $"{(durationSeconds == 0 ? "Ctrl+C for summary" : $"running {durationSeconds} s")}");
 
     byte[] buffer = GC.AllocateArray<byte>(65536, pinned: true);
+    var runStopwatch = Stopwatch.StartNew();
+    var duration = TimeSpan.FromSeconds(durationSeconds);
     try
     {
-        while (!stop)
+        while (!stop && (durationSeconds == 0 || runStopwatch.Elapsed < duration))
         {
-            int received = socket.Receive(buffer);
+            int received;
+            try
+            {
+                received = socket.Receive(buffer);
+            }
+            catch (SocketException e) when (e.SocketErrorCode == SocketError.TimedOut)
+            {
+                continue;
+            }
+
             Interlocked.Increment(ref packets);
             Interlocked.Add(ref bytes, received);
             if (received >= 8)
@@ -214,6 +239,7 @@ static int RunSink(string[] args)
     {
         // socket closed by the Ctrl+C handler
     }
+    stop = true; // ends the reporter thread
 
     Console.WriteLine($"received: {packets:N0} packets, {bytes:N0} bytes");
     if (maxSequence >= 0)

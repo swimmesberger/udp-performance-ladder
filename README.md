@@ -50,6 +50,10 @@ dotnet run -c Release --project tools/UdpBench -- send --target 192.168.1.10:500
 - `--size` is the UDP payload in bytes, minimum 8 (the sequence number).
 - `--duration 0` runs until Ctrl+C.
 
+The sink also takes `--duration <seconds>` to exit on its own and print the
+summary, which is what scripted runs (CI, the benchmark harness) use instead
+of sending signals.
+
 The sink prints per-second rates and a final summary with received count, the sequence span it observed, and the loss derived from the gap between the two. The loss number assumes a single sender per sink.
 
 ### Generator container
