@@ -28,6 +28,10 @@ jobs:
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v6.0.0
+        env:
+          # /usr/share/dotnet (the default install dir) is root-owned on
+          # this runner; the tool cache is writable and persists across runs.
+          DOTNET_INSTALL_DIR: ${{ runner.tool_cache }}/dotnet
         with:
           dotnet-version: 10.0.x
           dotnet-quality: ga
@@ -74,7 +78,7 @@ jobs:
   docker:
     name: Docker Build & Push
     needs: build
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: self-hosted
     timeout-minutes: 15
     permissions:
