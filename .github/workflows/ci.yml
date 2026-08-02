@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+
+jobs:
+  build:
+    name: Build & Smoke Test
+    runs-on: self-hosted
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6.0.0
+        with:
+          dotnet-version: 10.0.x
+          dotnet-quality: ga
+
+      - name: Restore
+        run: dotnet restore UdpPerformanceLadder.slnx
+
+      - name: Build
+        run: dotnet build UdpPerformanceLadder.slnx --no-restore --configuration Release
+
+      # End-to-end over loopback: sender -> rung 1 forwarder -> sink.
+      # Random ports so two runner instances on the same host don't collide.
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          BENCH=tools/UdpBench/bin/Release/net10.0/UdpBench
+          FWD=src/Forwarder.Rung1.Naive/bin/Release/net10.0/Forwarder.Rung1.Naive
+          LISTEN=$((20000 + RANDOM % 10000))
+          SINK=$((30000 + RANDOM % 10000))
+
+          "$BENCH" sink --listen $SINK > sink.log 2>&1 &
+          SINK_PID=$!
+          "$FWD" --listen $LISTEN --to 127.0.0.1:$SINK > fwd.log 2>&1 &
+          FWD_PID=$!
+          sleep 1
+
+          "$BENCH" send --target 127.0.0.1:$LISTEN --size 32 --rate 20000 --duration 3
+
+          sleep 1
+          kill -INT $SINK_PID
+          wait $SINK_PID || true
+          kill $FWD_PID || true
+
+          echo "--- forwarder ---"; cat fwd.log
+          echo "--- sink ---"; cat sink.log
+
+          RECEIVED=$(grep '^received:' sink.log | tr -d ',' | awk '{print $2}')
+          echo "sink received $RECEIVED packets"
+          if [ "${RECEIVED:-0}" -lt 50000 ]; then
+            echo "::error::smoke test: sink received $RECEIVED of ~60000 packets"
+            exit 1
+          fi
+
+  docker:
+    name: Docker Build & Push
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: self-hosted
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4.2.0
+        with:
+          driver: docker-container
+          driver-opts: |
+            image=moby/buildkit:latest
+            network=host
+          buildkitd-config-inline: |
+            [registry."simondatastore:50000"]
+              http = true
+
+      - name: Login to Registry
+        uses: docker/login-action@v4.6.0
+        with:
+          registry: simondatastore:50000
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - name: Build & Push udpbench
+        run: |
+          docker buildx build \
+            --file tools/UdpBench/Dockerfile \
+            --push \
+            --tag simondatastore:50000/udpbench:${{ github.sha }} \
+            --tag simondatastore:50000/udpbench:latest \
+            --cache-from type=registry,ref=simondatastore:50000/udpbench:cache \
+            --cache-to type=registry,ref=simondatastore:50000/udpbench:cache,mode=max \
+            .
