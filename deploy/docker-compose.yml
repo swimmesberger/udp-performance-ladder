@@ -1,0 +1,40 @@
+# Traffic generator + measuring sink for a benchmark run, meant to run on
+# the generator box (the NAS). Both services use host networking; a bridge
+# network would add its own forwarding layer and pollute the measurement.
+#
+# Usage (TARGET = the forwarder's listen endpoint on the device under test):
+#   TARGET=192.168.178.126:5000 docker compose up
+#
+# Both services exit on their own: the sender after SEND_DURATION, the sink
+# after SINK_DURATION (kept longer so it catches the tail and prints its
+# loss summary last). Copy .env.example to .env to pin your own defaults.
+services:
+  sink:
+    image: simondatastore:50000/udpbench:latest
+    pull_policy: always
+    network_mode: host
+    restart: "no"
+    command:
+      - sink
+      - --listen
+      - "${SINK_PORT:-6000}"
+      - --duration
+      - "${SINK_DURATION:-40}"
+
+  send:
+    image: simondatastore:50000/udpbench:latest
+    pull_policy: always
+    network_mode: host
+    restart: "no"
+    depends_on:
+      - sink
+    command:
+      - send
+      - --target
+      - "${TARGET:?set TARGET=<forwarder-host:port>}"
+      - --size
+      - "${SIZE:-32}"
+      - --rate
+      - "${RATE:-250000}"
+      - --duration
+      - "${SEND_DURATION:-30}"

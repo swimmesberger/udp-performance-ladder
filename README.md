@@ -67,6 +67,15 @@ docker run --rm --network host udpbench send --target 192.168.1.10:5000 --size 3
 
 `--network host` matters: a bridge network adds its own forwarding layer and pollutes the numbers.
 
+CI pushes the image to the private registry on every main build, and `deploy/docker-compose.yml` runs sender and sink together on the generator box:
+
+```
+cd deploy
+TARGET=192.168.178.126:5000 docker compose up
+```
+
+Copy `deploy/.env.example` to `.env` to pin rate, payload size, durations and ports. The sender exits after its duration, the sink a few seconds later with the loss summary.
+
 ## Micro-benchmarks
 
 `benchmarks/MicroBenchmarks` compares the per-datagram cost of the rung 1 and rung 2 receive paths over loopback with BenchmarkDotNet:
