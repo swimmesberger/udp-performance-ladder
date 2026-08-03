@@ -48,6 +48,9 @@ internal static unsafe partial class Rio
     [LibraryImport("ws2_32.dll", SetLastError = true, EntryPoint = "closesocket")]
     public static partial int CloseSocket(IntPtr socket);
 
+    [LibraryImport("ws2_32.dll", SetLastError = true, EntryPoint = "setsockopt")]
+    public static partial int SetSockOpt(IntPtr socket, int level, int optname, int* optval, int optlen);
+
     [LibraryImport("ws2_32.dll", SetLastError = true)]
     private static partial int WSAIoctl(
         IntPtr socket, uint ioControlCode,

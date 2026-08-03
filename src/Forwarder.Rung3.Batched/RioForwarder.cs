@@ -69,6 +69,13 @@ internal sealed unsafe class RioForwarder
             throw new InvalidOperationException($"WSASocketW failed: {System.Runtime.InteropServices.Marshal.GetLastWin32Error()}");
         }
 
+        // Aligned with every other rung (1 MB receive buffer). For RIO this
+        // should be a no-op: posted receives in the registered buffer are the
+        // buffering, and measurement confirmed identical numbers with and
+        // without it. It stays so the alignment is uniform, not assumed.
+        int receiveBuffer = 1 << 20;
+        Rio.SetSockOpt(_socket, 0xFFFF /* SOL_SOCKET */, 0x1002 /* SO_RCVBUF */, &receiveBuffer, sizeof(int));
+
         byte* bindAddr = stackalloc byte[Rio.SockAddrInetSize];
         Rio.WriteSockAddr(bindAddr, new IPEndPoint(IPAddress.Any, _options.ListenPort));
         if (Rio.Bind(_socket, bindAddr, Rio.SockAddrInetSize) != 0)

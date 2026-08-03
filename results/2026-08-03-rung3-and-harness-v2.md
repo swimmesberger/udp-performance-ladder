@@ -654,3 +654,14 @@ Rust+RIO is also cleaner at the top: 0.00% loss at 300k where C# RIO shed
 by the margin the model said it would be and no more. The ordering stands
 confirmed by construction: interface first (25-30%), dispatch model second
 (10-15%), language last (~5%).
+
+### Fairness check: SO_RCVBUF on the RIO rungs
+
+The Rust RIO port sets SO_RCVBUF to 1 MB; the C# RIO engine did not.
+Aligned and re-measured: C# RIO with the 1 MB buffer reads 0.00%/65.2%
+at 200k and 8.15%/88.9% at 300k, within run variance of the published
+0.28%/63.1% and 6.41%/88.6%. As theory predicts for RIO (posted receives
+are the buffering; the socket buffer is bypassed), the option is a no-op,
+so the Rust-vs-C# comparison was already fair. The setting stays in both
+engines so the ladder's alignment is uniform by construction rather than
+by argument.
