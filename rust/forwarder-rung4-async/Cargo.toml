@@ -1,0 +1,12 @@
+[package]
+name = "forwarder-rung4-async"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+socket2 = "0.6"
+tokio = { version = "1", features = ["rt", "net", "macros"] }
+
+[profile.release]
+lto = true
+codegen-units = 1

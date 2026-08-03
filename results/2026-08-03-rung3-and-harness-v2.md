@@ -270,3 +270,24 @@ tiered JIT promotion; Rust built with lto=true, codegen-units=1.
 Updated CPU ranking at 200k pps: C# async 88% > C# blocking 80% >
 Rust blocking 76% > C# RIO 63%. Kernel interface > dispatch model >
 language.
+
+## Rust async (tokio, current_thread): the async tax is not inherent
+
+Same forwarder, same single logical thread, loop calls changed to .await
+(tokio::net::UdpSocket on a current_thread runtime):
+
+| Offered | Rust blocking | Rust tokio | C# blocking | C# async |
+| ------- | ------------- | ---------- | ----------- | -------- |
+| 150,000 | 55.2% | 52.5% | 59.1% | 71.9% |
+| 200,000 | 75.9% | 79.2% | 80.0% | 88.0% |
+| 250,000 | 92.2% | 94.2% | 98.3% | 95.6% |
+
+Tokio's async costs nothing measurable vs blocking Rust (differences are
+within run variance), while .NET async costs 10-15% of a core at these
+rates. The tax is the dispatch implementation (IOCP completion -> thread
+pool continuation per op in .NET, vs stack-allocated state machine polled
+on the reactor thread in tokio), not the async concept. Caveat: single
+task on current_thread is tokio's best case.
+
+Updated 200k ranking: C# async 88% > C# blocking 80% > tokio 79% >
+Rust blocking 76% > C# RIO 63%.
