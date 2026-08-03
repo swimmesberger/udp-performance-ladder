@@ -1,0 +1,19 @@
+[package]
+name = "forwarder-rung4-rio"
+version = "0.1.0"
+edition = "2021"
+
+# The release profile (lto = true, codegen-units = 1, matching the other
+# rungs) lives in the workspace root Cargo.toml: cargo ignores profile
+# sections in non-root packages and warns about them.
+
+[target.'cfg(windows)'.dependencies]
+# Win32_Security is needed because CreateEventW's first parameter is
+# *const SECURITY_ATTRIBUTES and windows-sys gates the function on it.
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Networking_WinSock",
+    "Win32_Security",
+    "Win32_System_IO",
+    "Win32_System_Threading",
+] }

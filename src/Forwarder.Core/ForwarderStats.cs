@@ -52,6 +52,8 @@ public sealed class StatsReporter : IDisposable
         var stopwatch = Stopwatch.StartNew();
         long previousAllocated = GC.GetTotalAllocatedBytes(precise: false);
         int previousGen0 = GC.CollectionCount(0);
+        using var self = System.Diagnostics.Process.GetCurrentProcess();
+        TimeSpan previousCpu = self.TotalProcessorTime;
         while (!ct.IsCancellationRequested)
         {
             try
@@ -74,6 +76,14 @@ public sealed class StatsReporter : IDisposable
             previousAllocated = allocated;
             previousGen0 = gen0;
 
+            // Self-reported CPU (% of one core over the interval): immune to
+            // the cross-boundary /proc and process-name problems external
+            // sampling keeps hitting, and identical on every OS.
+            self.Refresh();
+            TimeSpan cpu = self.TotalProcessorTime;
+            double cpuPercent = (cpu - previousCpu).TotalSeconds / seconds * 100;
+            previousCpu = cpu;
+
             double rxPps = (current.RxPackets - previous.RxPackets) / seconds;
             double rxMbit = (current.RxBytes - previous.RxBytes) * 8 / seconds / 1_000_000;
             double txPps = (current.TxPackets - previous.TxPackets) / seconds;
@@ -83,6 +93,7 @@ public sealed class StatsReporter : IDisposable
                 $"rx {rxPps,11:N0} pps {rxMbit,8:N1} Mbit/s | " +
                 $"tx {txPps,11:N0} pps {txMbit,8:N1} Mbit/s | " +
                 $"alloc {allocRate,7:N1} MB/s gen0 {gen0Delta,3} | " +
+                $"cpu {cpuPercent,5:N1}% | " +
                 $"total rx {current.RxPackets:N0} tx {current.TxPackets:N0} drop {current.Dropped:N0}");
             previous = current;
         }

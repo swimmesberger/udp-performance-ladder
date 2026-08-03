@@ -598,3 +598,37 @@ Note the environment: this is the mirrored WSL2 virtual adapter, so these
 numbers are comparable to each other but not to the Windows bare-metal
 rungs, and not to the container-loopback race (where GSO reached
 ~930k pps/core because loopback has no NIC in the path).
+
+## Linux engine CPU over the real LAN (self-reported)
+
+CPU capture fixed by making every forwarder report its own
+Process.TotalProcessorTime per stats interval (immune to the /proc-across-
+wsl.exe problems; identical accounting on every OS). At a sustained
+200,000 pps over the LAN, steady-state, zero loss and zero drops:
+
+| Engine | CPU (one core) at 200k pps |
+| ------ | -------------------------- |
+| mmsg | ~35-39% |
+| mmsg + GSO | ~26% |
+| AF_PACKET rings | ~13% |
+
+Within-Linux this is a clean quantitative ranking: GSO ~1.4x cheaper than
+mmsg, AF_PACKET ~2.7x cheaper than mmsg at fixed load. It also closely
+matches the loopback race's GSO/AF_PACKET figures (28%/16% at 200k),
+which cross-validates the two environments for those engines.
+
+Cross-OS caveat, stated once and honestly: process CPU excludes work the
+kernel does outside the process. On Linux, receive softirq processing is
+not billed to the process, and AF_PACKET benefits most from that (the
+kernel fills its ring in softirq context; the app only reads it), so its
+13% understates total system cost more than the socket engines' numbers
+do. Windows bills DPC work outside the process similarly. Same-OS
+comparisons are solid; cross-OS ones are indicative only. With that
+caveat: the Linux engines at 200k use less app-side CPU than Windows RIO
+(63%) despite running behind the Hyper-V switch, a one-sided bound in
+their favor since the virtualization handicap only inflates their cost.
+
+Odd datum for completeness: mmsg does 200k at ~36% here but capped at
+~61k/core in the container-loopback race. Arrival batching differs
+(NIC-coalesced bursts batch recvmmsg efficiently; loopback wakes per
+packet), another instance of the arrival-pattern lesson.

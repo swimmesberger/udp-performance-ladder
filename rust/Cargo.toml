@@ -1,3 +1,10 @@
 [workspace]
 resolver = "2"
-members = ["forwarder-rung4", "forwarder-rung4-async"]
+members = ["forwarder-rung4", "forwarder-rung4-async", "forwarder-rung4-rio"]
+
+# Cargo only honors profiles at the workspace root (member-level [profile.*]
+# sections are ignored with a warning), so the settings every rung wants
+# live here.
+[profile.release]
+lto = true
+codegen-units = 1
