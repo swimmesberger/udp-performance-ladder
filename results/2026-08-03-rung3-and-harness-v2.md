@@ -369,3 +369,36 @@ mmsg is nearly but not exactly the socket-API ceiling. Above it:
   belongs at/beyond rung 5.
 
 Practical Linux ladder below XDP: plain loop -> mmsg -> mmsg+GSO, stop.
+
+## Six-lane Linux race: UDP GSO wins decisively; AF_PACKET tx unverified
+
+Same container harness (WSL2, loopback, 10 s windows). Sustained forwarding
+with loss measured sender-count vs forwarder-rx, CPU from /proc:
+
+| Engine | 400k offered | CPU | Effective pps/core |
+| ------ | ------------ | --- | ------------------ |
+| plain async (epoll) | 93.5% loss (~26k pps) | 238% | ~11,000 |
+| plain sync (emulated) | 87.8% loss (~49k pps) | 100% | ~49,000 |
+| io_uring | 86.3% loss (~55k pps) | 100% | ~55,000 |
+| mmsg | 84.7% loss (~61k pps) | 100% | ~61,000 |
+| **mmsg + UDP GSO** | **0.09% loss (400k pps)** | **43%** | **~930,000** |
+| AF_PACKET rings (tx unverified) | 0.00% loss (400k pps) | 30% | (see below) |
+
+GSO is not an incremental win: it forwards the full 400k offered at under
+half a core where mmsg saturates a core at ~61k, roughly 15x the work per
+core, and it holds 0.06-0.09% loss from 100k to 400k. Verified end to end:
+the sink's counter confirms delivery. Unthrottled it reaches ~960k pps at
+100% CPU. Mechanism: one sendmsg carries a packed batch plus a UDP_SEGMENT
+cmsg, so the stack is traversed once per batch instead of once per packet;
+the receive side is still plain recvmmsg, so a GRO receive path would be
+the next step.
+
+**AF_PACKET numbers are NOT publishable as forwarding results.** Its rx
+path demonstrably works (parses 100% of frames at 8-42% CPU), but frames
+written to the TPACKET_V2 tx ring never reach the sink on loopback: the
+kernel accepts the kick (send() returns success) and the sink receives
+zero. Counting a forward is not proof of delivery, which is exactly why
+the harness grew a sink column. Open: diagnose tx injection (candidate
+causes: loopback packet-type classification of injected frames, or a
+frame the stack accepts and then drops above the driver). Until then,
+AF_PACKET is an rx-side result only.

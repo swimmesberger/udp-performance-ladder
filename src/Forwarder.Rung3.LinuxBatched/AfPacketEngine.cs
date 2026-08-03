@@ -209,7 +209,19 @@ internal static unsafe partial class AfPacketEngine
 
             if (queued > 0)
             {
-                Send(txFd, null, 0, 0); // one kick per block of frames
+                // One kick per block of frames. A negative return means the
+                // kernel rejected the frames we built; without this check the
+                // engine reports a perfect forwarding rate while delivering
+                // nothing (it happened, and only the sink's counter caught it).
+                if (Send(txFd, null, 0, 0) < 0)
+                {
+                    int error = Marshal.GetLastWin32Error();
+                    if (error != 11 /* EAGAIN */)
+                    {
+                        throw new InvalidOperationException(
+                            $"AF_PACKET tx kick failed: errno {error}");
+                    }
+                }
             }
             System.Threading.Volatile.Write(ref *(uint*)(block + 8), 0); // back to the kernel
             rxBlockIndex = (rxBlockIndex + 1) % RxBlocks;

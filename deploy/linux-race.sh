@@ -35,7 +35,7 @@ run_engine() {
     kill $FWD $SINK 2>/dev/null; wait $FWD $SINK 2>/dev/null
 
     RX=$((RX1 - RX0)); TX=$((TX1 - TX0))
-    SINKED=$(grep '^received:' /tmp/sink.log | grep -oE '[0-9,]+ packets' | tr -d ', packets')
+    SINKED=$(grep -oE 'total [0-9,]+' /tmp/sink.log | tail -1 | tr -d 'total ,')
     CPU=$(( (C1 - C0) * 100 / (TICKS * DUR) ))
     LOSS=$(awk -v s="$SENT" -v r="$RX" 'BEGIN { printf("%.2f", (s > 0) ? (100 * (s - r) / s) : 0) }')
     printf '%9s offered  sent %9s  fwd_rx %9s (%5s%% rx loss)  fwd_tx %9s  sink %9s  cpu %3s%%\n' \
