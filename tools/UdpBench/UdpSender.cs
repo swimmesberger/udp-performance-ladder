@@ -83,7 +83,12 @@ public static class UdpSender
                 long due = (long)(stopwatch.Elapsed.TotalSeconds * threadRate);
                 if (sent >= due)
                 {
-                    Thread.SpinWait(64);
+                    // Yield rather than spin. Busy-waiting here made threads
+                    // starve each other on a machine with fewer cores than
+                    // threads: a 16-thread run asked for 100k pps and
+                    // delivered 31k. Sleeping wakes with a small deficit that
+                    // the next iterations send as a burst.
+                    Thread.Sleep(1);
                     continue;
                 }
             }
