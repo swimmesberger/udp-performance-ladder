@@ -102,3 +102,34 @@ Receive side improves markedly at overload (350k: 10.12% -> 2.56% rx loss);
 the tx ceiling stays ~276k/s (one RIOSendEx post per packet). Note: still
 zero heap allocation in steady state in all rung 3 variants; the memcpy in
 the interim design was a bandwidth cost, not an allocation.
+
+## Batched harness (sendmmsg/recvmmsg) and the flow-control discovery
+
+With batching on both sides, the harness ceilings moved decisively:
+
+| Component | Old | Batched |
+| --- | --- | --- |
+| Generator over the wire, unthrottled | ~540k pps | ~618k pps |
+| Generator+sink NAS-local, concurrent | ~495k / ~400k | ~725k pps at 3.6% loss |
+
+Rung 3 re-measured with clean (non-bursty) offered load:
+
+| Offered | Rx loss | CPU |
+| ------- | ------- | --- |
+| 300,000 | 0.18%   | 80.3% |
+| 350,000 | 0.04%   | 79.1% |
+| 400,000 | 0.66%   | 81.7% |
+| 450,000 | 6.45%   | 80.9% |
+
+Receive capacity is ~420k pps, notably better than measured under the old
+bursty generator. But the forwarding (tx) rate FELL to ~210k/s at only ~80%
+CPU, versus ~276k earlier. Cause identified but not yet removed: Ethernet
+flow control is enabled on the DUT NIC (Rx & Tx), so the NAS, now much
+busier, can PAUSE the workstation's transmit at the MAC layer. The
+forwarding ceiling currently measures the harness receiver's ingestion
+rate through PAUSE frames, not the forwarder.
+
+Open item before tx numbers are publishable: disable flow control on the
+DUT NIC (and Energy-Efficient Ethernet / Green Ethernet / Power Saving
+Mode, all currently enabled), or move the fan-out destination to a box
+that is not also the generator.
