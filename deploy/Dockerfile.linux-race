@@ -1,0 +1,20 @@
+# The Linux rung 3 race, self-contained: plain loop (rung 2 --sync) vs
+# recvmmsg/sendmmsg vs io_uring, with udpbench as generator and sink, all
+# over the container's loopback. Build from the repository root:
+#   podman build --network host -f deploy/Dockerfile.linux-race -t linux-race .
+# io_uring needs the seccomp gate opened:
+#   podman run --rm --security-opt seccomp=unconfined linux-race
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+WORKDIR /src
+COPY Directory.Build.props .
+COPY src src
+COPY tools tools
+RUN dotnet publish src/Forwarder.Rung2.Frugal -c Release -o /app/rung2 \
+ && dotnet publish src/Forwarder.Rung3.LinuxBatched -c Release -o /app/rung3 \
+ && dotnet publish tools/UdpBench/UdpBench.csproj -c Release -o /app/bench
+
+FROM mcr.microsoft.com/dotnet/aspnet:10.0
+WORKDIR /app
+COPY --from=build /app .
+COPY deploy/linux-race.sh .
+ENTRYPOINT ["bash", "linux-race.sh"]
