@@ -1,0 +1,21 @@
+# The Linux forwarder rungs, for running on a real host on the real LAN.
+# Built and pushed by CI as simondatastore:50000/udpladder-forwarder.
+#
+# AF_PACKET needs raw-socket capability and the interface that faces the
+# peer; it discovers its own MAC/IP and resolves the peer's MAC from the
+# neighbour table, so a run only names the interface:
+#   docker run --rm --network host --cap-add=NET_RAW \
+#     -e AFPACKET_IFACE=eth0 simondatastore:50000/udpladder-forwarder \
+#     --engine afpacket --listen 5000 --to <peer-ip>:6000
+# The mmsg/gso/uring engines need no capabilities (io_uring additionally
+# needs a seccomp profile that allows it).
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+WORKDIR /src
+COPY Directory.Build.props .
+COPY src src
+RUN dotnet publish src/Forwarder.Rung3.LinuxBatched -c Release -o /app
+
+FROM mcr.microsoft.com/dotnet/aspnet:10.0
+WORKDIR /app
+COPY --from=build /app .
+ENTRYPOINT ["dotnet", "Forwarder.Rung3.LinuxBatched.dll"]

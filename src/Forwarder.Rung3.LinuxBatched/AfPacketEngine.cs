@@ -158,14 +158,12 @@ internal static unsafe partial class AfPacketEngine
         // host. Loopback tolerates zeros and 127.0.0.1, a switch does not.
         Span<byte> sourceMac = stackalloc byte[6];
         Span<byte> destMac = stackalloc byte[6];
-        ParseMac(Environment.GetEnvironmentVariable("AFPACKET_SRC_MAC"), sourceMac);
-        ParseMac(Environment.GetEnvironmentVariable("AFPACKET_DST_MAC"), destMac);
-        Span<byte> sourceIp = stackalloc byte[4] { 127, 0, 0, 1 };
-        string? configuredSourceIp = Environment.GetEnvironmentVariable("AFPACKET_SRC_IP");
-        if (configuredSourceIp is not null)
-        {
-            System.Net.IPAddress.Parse(configuredSourceIp).TryWriteBytes(sourceIp, out _);
-        }
+        Span<byte> sourceIp = stackalloc byte[4];
+        ResolveLocalAddressing(interfaceName, sourceMac, sourceIp);
+        ResolveDestinationMac(options.Destinations[0], destMac);
+        Console.WriteLine(
+            $"  iface {interfaceName} src {new System.Net.IPAddress(sourceIp)} " +
+            $"[{Convert.ToHexString(sourceMac)}] -> peer [{Convert.ToHexString(destMac)}]");
 
         uint rxBlockIndex = 0;
         uint txFrameIndex = 0;
@@ -345,6 +343,87 @@ internal static unsafe partial class AfPacketEngine
             throw new InvalidOperationException($"ring mmap failed: errno {Marshal.GetLastWin32Error()}");
         }
         return (byte*)mapped;
+    }
+
+    /// <summary>Source MAC and IPv4 of the outgoing interface. Environment
+    /// overrides win; otherwise both come from the interface itself, so a
+    /// deployment only needs to name the interface.</summary>
+    private static void ResolveLocalAddressing(string interfaceName, Span<byte> mac, Span<byte> ip)
+    {
+        string? macOverride = Environment.GetEnvironmentVariable("AFPACKET_SRC_MAC");
+        string? ipOverride = Environment.GetEnvironmentVariable("AFPACKET_SRC_IP");
+
+        System.Net.NetworkInformation.NetworkInterface? nic = System.Net.NetworkInformation.NetworkInterface
+            .GetAllNetworkInterfaces()
+            .FirstOrDefault(n => n.Name == interfaceName);
+
+        if (macOverride is not null)
+        {
+            ParseMac(macOverride, mac);
+        }
+        else
+        {
+            byte[]? bytes = nic?.GetPhysicalAddress().GetAddressBytes();
+            if (bytes is null || bytes.Length != 6)
+            {
+                throw new InvalidOperationException(
+                    $"no MAC for '{interfaceName}'; set AFPACKET_SRC_MAC");
+            }
+            bytes.CopyTo(mac);
+        }
+
+        if (ipOverride is not null)
+        {
+            System.Net.IPAddress.Parse(ipOverride).TryWriteBytes(ip, out _);
+            return;
+        }
+        System.Net.IPAddress? address = nic?.GetIPProperties().UnicastAddresses
+            .Select(a => a.Address)
+            .FirstOrDefault(a => a.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork);
+        if (address is null)
+        {
+            throw new InvalidOperationException(
+                $"no IPv4 address on '{interfaceName}'; set AFPACKET_SRC_IP");
+        }
+        address.TryWriteBytes(ip, out _);
+    }
+
+    /// <summary>Destination MAC from the kernel's neighbour table. A probe
+    /// datagram is sent first so the entry exists: we are bypassing the
+    /// stack for data, not reimplementing ARP.</summary>
+    private static void ResolveDestinationMac(System.Net.IPEndPoint destination, Span<byte> mac)
+    {
+        string? macOverride = Environment.GetEnvironmentVariable("AFPACKET_DST_MAC");
+        if (macOverride is not null)
+        {
+            ParseMac(macOverride, mac);
+            return;
+        }
+
+        string target = destination.Address.ToString();
+        for (int attempt = 0; attempt < 20; attempt++)
+        {
+            foreach (string line in File.ReadLines("/proc/net/arp").Skip(1))
+            {
+                string[] fields = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (fields.Length >= 4 && fields[0] == target && fields[3] != "00:00:00:00:00:00")
+                {
+                    ParseMac(fields[3], mac);
+                    return;
+                }
+            }
+            if (attempt == 0)
+            {
+                using var probe = new System.Net.Sockets.Socket(
+                    System.Net.Sockets.AddressFamily.InterNetwork,
+                    System.Net.Sockets.SocketType.Dgram,
+                    System.Net.Sockets.ProtocolType.Udp);
+                try { probe.SendTo(new byte[1], destination); } catch { /* ARP is the point */ }
+            }
+            Thread.Sleep(100);
+        }
+        throw new InvalidOperationException(
+            $"could not resolve a MAC for {target}; set AFPACKET_DST_MAC");
     }
 
     private static void ParseMac(string? value, Span<byte> destination)

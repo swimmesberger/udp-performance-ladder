@@ -483,3 +483,42 @@ topology (ip netns needs mount privileges podman does not grant here, and
 /sys is not namespace-aware under nsenter). Options: run the peer side as
 a second container on a podman network, or measure it on the real LAN with
 the forwarder on a Linux host and the NAS as peer.
+
+## AF_PACKET on the real LAN: delivery verified
+
+Topology that finally worked: WSL2 switched to mirrored networking
+(networkingMode=mirrored in .wslconfig), which gives the Linux VM the
+workstation's real LAN address (192.168.178.143 on eth0) and therefore
+L2 adjacency with the NAS. The forwarder runs there as a self-contained
+single-file linux-x64 binary (podman's Windows client cannot reach its VM
+under mirrored networking; containers were unnecessary anyway). The NAS
+generates and sinks over the control API.
+
+Also required: a Hyper-V firewall rule. Under mirrored networking, WSL
+traffic is governed by the Hyper-V firewall, whose DefaultInboundAction
+is Block, and which is separate from the ordinary Windows Firewall rules.
+Without an inbound UDP 5000 rule there the forwarder sees nothing at all.
+
+The engine self-configures: it reads its own MAC and IPv4 from the named
+interface and resolves the peer's MAC from the neighbour table after an
+ARP probe (resolved the NAS as 00:11:32:EA:20:7D), so a deployment only
+names the interface.
+
+| Offered | Sent | Forwarder rx | Rx loss | End-to-end loss |
+| ------- | ---- | ------------ | ------- | --------------- |
+| 100,000 | 999,922 | 999,922 | 0.00% | 1.67% |
+| 200,000 | 1,999,915 | 1,999,915 | 0.00% | 12.92% |
+| 300,000 | 2,997,874 | 2,685,367 | 10.42% | 38.41% |
+
+The raw-frame path receives everything offered up to 200k pps and starts
+shedding around 300k. End-to-end loss exceeds receive loss because the
+return leg lands on the NAS sink, which ceilings near 220k pps; those are
+sink-side drops, not forwarder drops (the forwarder's own drop counter
+stayed at zero throughout).
+
+Caveats: this runs on a mirrored WSL2 virtual adapter, a third environment
+distinct from both the Windows-native rungs and the container-loopback
+Linux race, so the numbers are not comparable across those sets. CPU per
+packet was not captured: reading /proc across the wsl.exe boundary proved
+unreliable. Next: run the forwarder on a native Linux host (the NAS, with
+the workstation as peer) for numbers comparable to the rest of the ladder.

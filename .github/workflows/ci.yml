@@ -117,3 +117,16 @@ jobs:
             --cache-from type=registry,ref=simondatastore:50000/udpbench:cache \
             --cache-to type=registry,ref=simondatastore:50000/udpbench:cache,mode=max \
             .
+
+      # The Linux forwarder rungs, for running on a real LAN host. AF_PACKET
+      # only means anything on an interface facing a real peer.
+      - name: Build & Push forwarder
+        run: |
+          docker buildx build \
+            --file deploy/Dockerfile.forwarder \
+            --push \
+            --tag simondatastore:50000/udpladder-forwarder:${{ github.sha }} \
+            --tag simondatastore:50000/udpladder-forwarder:latest \
+            --cache-from type=registry,ref=simondatastore:50000/udpladder-forwarder:cache \
+            --cache-to type=registry,ref=simondatastore:50000/udpladder-forwarder:cache,mode=max \
+            .
