@@ -352,3 +352,20 @@ SQPOLL (removes the last syscall but burns a dedicated core; a loss on
 pps/core), registered buffers / SEND_ZC (large payloads only). io_uring's
 structural advantages (mixed I/O, chaining, zero-copy sends) go unused by
 tiny-datagram fan-out. Prediction if a rematch is run: parity +/- 10%.
+
+### The Linux ceiling below XDP/eBPF (assessment)
+
+mmsg is nearly but not exactly the socket-API ceiling. Above it:
+- UDP_SEGMENT (GSO): one send call carries a buffer of equal-size
+  payloads + segment size; the kernel/NIC splits after one stack
+  traversal. Fits fan-out well (same bytes, one destination per send);
+  QUIC stacks ship on it. Receive twin (UDP GRO) needs equal-size runs.
+  Candidate optional rung: mmsg + GSO.
+- AF_PACKET + PACKET_MMAP (TPACKET_V3): raw-frame rings, no eBPF, no
+  driver requirements, near-zero syscalls, but you already pay raw-frame
+  costs (header parse/build/checksum) - most of rung 5's complexity for
+  less of its win. Not worth a rung.
+- DPDK is not eBPF but is more invasive than XDP (owns the NIC); it
+  belongs at/beyond rung 5.
+
+Practical Linux ladder below XDP: plain loop -> mmsg -> mmsg+GSO, stop.
