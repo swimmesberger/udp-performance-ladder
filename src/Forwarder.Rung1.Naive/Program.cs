@@ -27,6 +27,12 @@ var stats = new ForwarderStats();
 using var reporter = StatsReporter.Start(stats, options.StatsInterval);
 
 using var client = new UdpClient(options.ListenPort);
+// The one deliberate non-default: UdpClient leaves the socket receive
+// buffer at the OS default (~64 KB), which overflows on line-rate bursts
+// long before the loop itself is the limit (measured: 9.5% loss at
+// 250k pps with the default vs the aligned buffer). Every rung uses 1 MB
+// so the ladder isolates one variable per rung; the default is the trap.
+client.Client.ReceiveBufferSize = 1 << 20;
 Console.WriteLine(
     $"rung 1 (naive): listening on :{options.ListenPort}, " +
     $"forwarding to {options.Destinations.Count} destination(s)");

@@ -204,3 +204,21 @@ buffer where UdpClient defaults to ~64 KB, and the burst-tolerance edge is
 likely mostly that buffer, not the allocation work. Rung 3 forwards
 everything it receives at every rate, saturates ~306k pps rx / one core,
 and does 200k for 63% of a core vs 84-88% for rungs 1/2.
+
+## Control run: rung 1 with the receive buffer aligned to 1 MB
+
+UdpClient leaves SO_RCVBUF at the OS default (~64 KB); rung 2 sets 1 MB.
+That confound owned the entire burst-tolerance gap. Rung 1 with
+`client.Client.ReceiveBufferSize = 1 << 20` (now the committed code; all
+rungs aligned at 1 MB):
+
+| Offered | Rx loss (aligned) | Rx loss (64 KB default) | CPU |
+| ------- | ----------------- | ----------------------- | --- |
+| 150,000 | 0.00%             | 0.55%                   | 74.4% |
+| 200,000 | 0.00%             | 2.22%                   | 88.0% |
+| 250,000 | 0.78%             | 9.47%                   | 97.8% |
+| 300,000 | 14.92%            | 14.69%                  | 101.7% |
+
+Aligned, rungs 1 and 2 are statistically identical in every column: the
+pure null result stands, and the burst-tolerance win belonged to the
+buffer, not the allocation work.
