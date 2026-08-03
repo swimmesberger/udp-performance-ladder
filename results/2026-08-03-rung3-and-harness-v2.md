@@ -522,3 +522,34 @@ Linux race, so the numbers are not comparable across those sets. CPU per
 packet was not captured: reading /proc across the wsl.exe boundary proved
 unreliable. Next: run the forwarder on a native Linux host (the NAS, with
 the workstation as peer) for numbers comparable to the rest of the ladder.
+
+## Can rung 5 (XDP) even be measured on this hardware?
+
+Checked rather than assumed:
+
+- **Windows / Realtek PCIe 2.5GbE**: XDP-for-Windows native mode needs the
+  NIC driver to implement Microsoft's NDIS XDP extensions (Intel, NVIDIA,
+  Microsoft adapters in practice). A consumer Realtek driver does not ship
+  them. Only generic mode would attach, and generic mode re-enters the
+  stack XDP exists to bypass: not publishable as an XDP result.
+- **Linux in the WSL VM**: eth0 is hv_netvsc (kernel 6.6), which does
+  implement the XDP hook, so a program would attach in driver mode. But
+  the packet reaches netvsc only after the Realtek driver, the Windows
+  NDIS path and the Hyper-V switch have already handled it. XDP there
+  bypasses the *Linux* stack while every cost XDP is meant to remove has
+  already been paid upstream. Valid as an A/B of XDP vs sockets inside
+  that VM; invalid as a measurement of what XDP does on real hardware.
+  (netvsc also lacks AF_XDP zero-copy, so the umem would be copy-mode.)
+- **This workstation under Linux**: the same NIC binds to r8169, which
+  does not implement XDP either.
+
+Consequence: a genuine rung 5 needs bare-metal Linux with an XDP-capable
+driver. Best candidate in the house is the NAS if its NIC is Intel-based
+(igb/igc/e1000e/ixgbe/i40e), with the workstation as peer. Otherwise the
+honest outcome is to write rung 5 as a documented limitation: the rung
+requires hardware support that commodity gear does not provide, which is
+itself the deployment reality check the chapter promised.
+
+Trap to guard against: AF_XDP silently falls back to generic/SKB mode on
+unsupported drivers. Any run must assert it got the mode it asked for
+(XDP_FLAGS_DRV_MODE) rather than accept a plausible-looking number.
