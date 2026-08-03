@@ -574,3 +574,27 @@ Rung 5 options:
 AF_PACKET keeps its place in this rung precisely because it needs none of
 that: raw frames, no eBPF, no driver support, and it is already verified
 forwarding on a real link here.
+
+## Linux engines over the real LAN (WSL VM, mirrored adapter)
+
+Same peer (NAS generator + sink), same 10 s runs, 4 sender threads.
+Receive loss is sender count vs the forwarder's own counter; end-to-end
+loss includes the return leg into the NAS sink, which ceilings near
+220k pps, so above that it measures the sink, not the forwarder.
+
+| Engine | 200k offered rx loss | 300k offered rx loss |
+| ------ | -------------------- | -------------------- |
+| mmsg   | 2.37% | 5.72% |
+| mmsg + GSO | 0.32% | **1.04%** |
+| AF_PACKET | **0.00%** | 10.15% |
+
+Reading: GSO is the most robust across the range, holding ~1% loss at
+300k where plain mmsg sheds 5.7%. AF_PACKET is flawless to 200k and then
+falls off a cliff, which fits its design here: a single-threaded engine
+doing all header work itself, with no kernel batching to fall back on
+once the ring pressure rises.
+
+Note the environment: this is the mirrored WSL2 virtual adapter, so these
+numbers are comparable to each other but not to the Windows bare-metal
+rungs, and not to the container-loopback race (where GSO reached
+~930k pps/core because loopback has no NIC in the path).
