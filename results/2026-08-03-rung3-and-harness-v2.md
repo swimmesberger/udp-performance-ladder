@@ -156,3 +156,51 @@ Consequence: the final published matrix must fix one arrival profile
 it in the methodology. Pending the NIC hygiene pass (flow control, EEE,
 Green Ethernet, power saving all currently enabled on the DUT), after
 which the full three-rung matrix gets one definitive run.
+
+## FINAL matrix (definitive configuration)
+
+DUT NIC hygiene applied: flow control OFF, EEE OFF, Green Ethernet OFF,
+Power Saving Mode OFF, Gigabit Lite OFF, receive buffers 4096 (driver max),
+interrupt moderation left ON (throughput-realistic default). Batched
+generator, 8 threads, line-rate bursts up to 64; 10 s runs, 3 s discarded
+warmup; loss = sender count vs forwarder rx counter.
+
+Flow-control note: with PAUSE enabled the DUT *looked* better (0.66% rx
+loss at 400k) because the NAS was being silently throttled at the MAC
+layer. PAUSE off exposes true per-layer capacity; it also un-throttled the
+forwarder's tx, which now equals rx at every rate (rung 3 drop counter 0).
+
+Rung 1, naive UdpClient (default ~64 KB socket buffer):
+
+| Offered | Rx loss | CPU |
+| ------- | ------- | --- |
+| 150,000 | 0.55%   | 73.3% |
+| 200,000 | 2.22%   | 84.1% |
+| 250,000 | 9.47%   | 90.5% |
+| 300,000 | 14.69%  | 98.6% |
+
+Rung 2, frugal Socket (1 MB socket buffer):
+
+| Offered | Rx loss | CPU |
+| ------- | ------- | --- |
+| 150,000 | 0.00%   | 71.9% |
+| 200,000 | 0.00%   | 88.0% |
+| 250,000 | 0.12%   | 95.6% |
+| 300,000 | 11.76%  | 101.2% |
+
+Rung 3, Registered I/O (4096 posted receives):
+
+| Offered | Rx loss | CPU |
+| ------- | ------- | --- |
+| 150,000 | 0.00%   | 50.8% |
+| 200,000 | 0.28%   | 63.1% |
+| 250,000 | 1.81%   | 80.5% |
+| 300,000 | 6.41%   | 88.6% |
+| 400,000 | 20.39%  | 97.0% (peak sustained rx ~306k/s) |
+
+Reading: under bursty arrivals rung 2 now beats rung 1 (clean to 250k vs
+wobbling from 150k). Attribution caveat: rung 2 also sets a 1 MB receive
+buffer where UdpClient defaults to ~64 KB, and the burst-tolerance edge is
+likely mostly that buffer, not the allocation work. Rung 3 forwards
+everything it receives at every rate, saturates ~306k pps rx / one core,
+and does 200k for 63% of a core vs 84-88% for rungs 1/2.
