@@ -183,7 +183,8 @@ public sealed record RunRequest(
     int Threads = 1,
     bool Sink = true,
     int SinkPort = 6000,
-    int? SinkDurationSeconds = null);
+    int? SinkDurationSeconds = null,
+    int SinkThreads = 1);
 
 public sealed class BenchmarkRun
 {
@@ -212,7 +213,7 @@ public sealed class BenchmarkRun
                 {
                     // The sink outlives the sender so it catches the tail of the run.
                     int sinkDuration = request.SinkDurationSeconds ?? request.SendDurationSeconds + 5;
-                    var sinkOptions = new SinkOptions(request.SinkPort, sinkDuration);
+                    var sinkOptions = new SinkOptions(request.SinkPort, sinkDuration, request.SinkThreads);
                     sinkTask = Task.Run(() => UdpSink.Run(sinkOptions, progress: null, CancellationToken.None));
                     await Task.Delay(500); // let the sink bind before load starts
                 }

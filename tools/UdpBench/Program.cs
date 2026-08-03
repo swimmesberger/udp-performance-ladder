@@ -31,7 +31,7 @@ static int PrintUsage()
         usage:
           udpbench send --target <host:port> [--size <bytes>] [--rate <pps>]
                         [--duration <seconds>] [--threads <n>]
-          udpbench sink --listen <port> [--duration <seconds>]
+          udpbench sink --listen <port> [--duration <seconds>] [--threads <n>]
           udpbench serve [--port <port>]
           udpbench health [--port <port>]
 
@@ -45,6 +45,8 @@ static int PrintUsage()
         sink options:
           --duration  seconds to run before printing the summary;
                       0 = until Ctrl+C (default 0)
+          --threads   receive threads sharing the socket (default 1);
+                      one thread cannot keep up with a fast forwarder
 
         serve options:
           --port      HTTP port for the control API (default 5390);
@@ -125,6 +127,7 @@ static int RunSink(string[] args)
 {
     int port = 6000;
     int durationSeconds = 0;
+    int threads = 1;
 
     for (int i = 0; i < args.Length; i++)
     {
@@ -135,6 +138,9 @@ static int RunSink(string[] args)
                 break;
             case "--duration":
                 durationSeconds = int.Parse(args[++i]);
+                break;
+            case "--threads":
+                threads = int.Parse(args[++i]);
                 break;
             default:
                 Console.Error.WriteLine($"unknown argument '{args[i]}'");
@@ -154,7 +160,7 @@ static int RunSink(string[] args)
         $"{(durationSeconds == 0 ? "Ctrl+C for summary" : $"running {durationSeconds} s")}");
 
     SinkResult result = UdpSink.Run(
-        new SinkOptions(port, durationSeconds), Console.WriteLine, cts.Token);
+        new SinkOptions(port, durationSeconds, threads), Console.WriteLine, cts.Token);
 
     Console.WriteLine($"received: {result.Packets:N0} packets, {result.Bytes:N0} bytes");
     if (result.MaxSequence >= 0)

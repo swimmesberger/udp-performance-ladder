@@ -6,6 +6,7 @@
     <Project Path="src/Forwarder.Core/Forwarder.Core.csproj" />
     <Project Path="src/Forwarder.Rung1.Naive/Forwarder.Rung1.Naive.csproj" />
     <Project Path="src/Forwarder.Rung2.Frugal/Forwarder.Rung2.Frugal.csproj" />
+    <Project Path="src/Forwarder.Rung3.Batched/Forwarder.Rung3.Batched.csproj" />
   </Folder>
   <Folder Name="/tools/">
     <Project Path="tools/UdpBench/UdpBench.csproj" />
