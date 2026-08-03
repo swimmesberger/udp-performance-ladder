@@ -448,3 +448,38 @@ Real bugs found and fixed while chasing this:
 
 Verdict for the article: AF_PACKET belongs with XDP in the raw-frame rung,
 and its numbers stay unpublished until a sink confirms delivery.
+
+### What DPDK's AF_PACKET driver does, and what it means for ours
+
+DPDK's af_packet PMD uses the same primitives (PACKET_MMAP rings, poll
+tp_status on rx, fill + TP_STATUS_SEND_REQUEST + sendto kick on tx) plus
+two things ours lacked:
+
+1. **PACKET_QDISC_BYPASS**: without it every injected frame traverses the
+   traffic-control layer (qdisc enqueue/dequeue plus its lock) on the way
+   to the driver; with it the kernel calls dev_direct_xmit. This is the
+   "socket queue overhead" question's actual answer, and it is one
+   setsockopt. Now implemented.
+2. **PACKET_FANOUT** to spread rx across sockets/threads, since one socket
+   is one ring. Not needed for our single-threaded design yet.
+
+The more important lesson is architectural: a DPDK application owns the
+port and transmits **to the wire toward another host**. It never asks the
+local kernel to route an injected frame back to a local socket. Our
+loopback test did exactly that, which is why it hit the martian-source
+path: locally generated packets carry a dst entry from their output route
+and skip input routing entirely, while an injected frame has no dst, takes
+the full input path, and is rejected.
+
+So the fix is topological, not a cleverer injection: raw-frame forwarding
+must be measured host-to-host (or across a veth pair spanning two network
+namespaces), exactly like the LAN benchmark the rest of this project uses.
+Implemented for that: PACKET_QDISC_BYPASS, configurable source/destination
+MAC (AFPACKET_SRC_MAC / AFPACKET_DST_MAC) and source IP (AFPACKET_SRC_IP),
+since a real link needs real addressing where loopback tolerated zeros.
+
+Still to do: a test bed. The race container cannot build the two-namespace
+topology (ip netns needs mount privileges podman does not grant here, and
+/sys is not namespace-aware under nsenter). Options: run the peer side as
+a second container on a podman network, or measure it on the real LAN with
+the forwarder on a Linux host and the NAS as peer.

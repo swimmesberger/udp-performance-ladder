@@ -14,6 +14,10 @@ RUN dotnet publish src/Forwarder.Rung2.Frugal -c Release -o /app/rung2 \
  && dotnet publish tools/UdpBench/UdpBench.csproj -c Release -o /app/bench
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0
+# iproute2 for the veth harness the AF_PACKET engine needs: raw-frame
+# forwarding is only meaningful across a real link to a peer, not looped
+# back into the local stack.
+RUN apt-get update && apt-get install -y --no-install-recommends iproute2  && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=build /app .
 COPY deploy/linux-race.sh .

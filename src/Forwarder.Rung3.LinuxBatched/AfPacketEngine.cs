@@ -22,6 +22,7 @@ internal static unsafe partial class AfPacketEngine
     private const int PACKET_VERSION = 10;
     private const int PACKET_RX_RING = 5;
     private const int PACKET_TX_RING = 13;
+    private const int PACKET_QDISC_BYPASS = 20;
     private const int TPACKET_V2 = 1;
     private const int TPACKET_V3 = 2;
     private const int SO_ATTACH_FILTER = 26;
@@ -131,6 +132,15 @@ internal static unsafe partial class AfPacketEngine
             FrameNr = TxFrames,
         };
         Check(Libc.SetSockOpt(txFd, SOL_PACKET, PACKET_TX_RING, (int*)&txReq, (uint)sizeof(TpacketReq)), "PACKET_TX_RING");
+        // Skip the traffic-control layer on transmit: without this every
+        // injected frame pays a qdisc enqueue/dequeue and its lock. DPDK's
+        // AF_PACKET driver exposes the same switch as its qdisc_bypass
+        // option, and it is the single biggest transmit win here.
+        int bypass = 1;
+        if (Libc.SetSockOpt(txFd, SOL_PACKET, PACKET_QDISC_BYPASS, &bypass, sizeof(int)) != 0)
+        {
+            Console.Error.WriteLine("note: PACKET_QDISC_BYPASS unavailable, transmitting through the qdisc");
+        }
         byte* txRing = MapRing(txFd, (nuint)TxFrames * FrameSize);
         BindToInterface(txFd, ifIndex, ETH_P_IP);
 
@@ -141,6 +151,20 @@ internal static unsafe partial class AfPacketEngine
         {
             options.Destinations[d].Address.TryWriteBytes(destIps.Slice(d * 4, 4), out _);
             destPorts[d] = (ushort)options.Destinations[d].Port;
+        }
+
+        // On a real link the frame needs real addressing: the peer's MAC (or
+        // the gateway's), our own MAC, and a source IP that belongs to this
+        // host. Loopback tolerates zeros and 127.0.0.1, a switch does not.
+        Span<byte> sourceMac = stackalloc byte[6];
+        Span<byte> destMac = stackalloc byte[6];
+        ParseMac(Environment.GetEnvironmentVariable("AFPACKET_SRC_MAC"), sourceMac);
+        ParseMac(Environment.GetEnvironmentVariable("AFPACKET_DST_MAC"), destMac);
+        Span<byte> sourceIp = stackalloc byte[4] { 127, 0, 0, 1 };
+        string? configuredSourceIp = Environment.GetEnvironmentVariable("AFPACKET_SRC_IP");
+        if (configuredSourceIp is not null)
+        {
+            System.Net.IPAddress.Parse(configuredSourceIp).TryWriteBytes(sourceIp, out _);
         }
 
         uint rxBlockIndex = 0;
@@ -202,7 +226,8 @@ internal static unsafe partial class AfPacketEngine
                         continue;
                     }
                     byte* outFrame = slot + TxDataOffset;
-                    BuildFrame(outFrame, destIps.Slice(d * 4, 4), destPorts[d],
+                    BuildFrame(outFrame, sourceMac, destMac, sourceIp,
+                        destIps.Slice(d * 4, 4), destPorts[d],
                         (ushort)options.ListenPort, payload, payloadLength);
                     *(uint*)(slot + 4) = (uint)(HeadersLength + payloadLength); // tp_len
                     System.Threading.Volatile.Write(ref *(uint*)slot, TP_STATUS_SEND_REQUEST);
@@ -234,13 +259,15 @@ internal static unsafe partial class AfPacketEngine
         }
     }
 
-    /// <summary>Complete Ethernet+IPv4+UDP frame; on loopback the MACs are zero.
-    /// UDP checksum 0 is legal for IPv4; the IP header checksum is not optional.</summary>
-    private static void BuildFrame(byte* frame, ReadOnlySpan<byte> destIp, ushort destPort,
+    /// <summary>Complete Ethernet+IPv4+UDP frame. UDP checksum 0 is legal for
+    /// IPv4; the IP header checksum is not optional.</summary>
+    private static void BuildFrame(byte* frame, ReadOnlySpan<byte> sourceMac, ReadOnlySpan<byte> destMac,
+        ReadOnlySpan<byte> sourceIp, ReadOnlySpan<byte> destIp, ushort destPort,
         ushort sourcePort, byte* payload, int payloadLength)
     {
         var span = new Span<byte>(frame, HeadersLength + payloadLength);
-        span[..14].Clear();
+        destMac.CopyTo(span[..6]);
+        sourceMac.CopyTo(span[6..12]);
         BinaryPrimitives.WriteUInt16BigEndian(span[12..], ETH_P_IP);
 
         Span<byte> ip = span[14..];
@@ -251,7 +278,7 @@ internal static unsafe partial class AfPacketEngine
         ip[8] = 64;                                             // ttl
         ip[9] = 17;                                             // udp
         BinaryPrimitives.WriteUInt16BigEndian(ip[10..], 0);     // checksum, below
-        ip[12] = 127; ip[13] = 0; ip[14] = 0; ip[15] = 1;       // src 127.0.0.1
+        sourceIp.CopyTo(ip[12..16]);
         destIp.CopyTo(ip[16..20]);
         BinaryPrimitives.WriteUInt16BigEndian(ip[10..], IpChecksum(ip[..20]));
 
@@ -318,6 +345,18 @@ internal static unsafe partial class AfPacketEngine
             throw new InvalidOperationException($"ring mmap failed: errno {Marshal.GetLastWin32Error()}");
         }
         return (byte*)mapped;
+    }
+
+    private static void ParseMac(string? value, Span<byte> destination)
+    {
+        destination.Clear();
+        if (string.IsNullOrEmpty(value)) return;
+        string[] parts = value.Split(':', '-');
+        if (parts.Length != 6) throw new ArgumentException($"'{value}' is not a MAC address");
+        for (int i = 0; i < 6; i++)
+        {
+            destination[i] = Convert.ToByte(parts[i], 16);
+        }
     }
 
     private static void Check(int result, string what)
