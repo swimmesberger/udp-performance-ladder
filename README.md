@@ -67,14 +67,39 @@ docker run --rm --network host udpbench send --target 192.168.1.10:5000 --size 3
 
 `--network host` matters: a bridge network adds its own forwarding layer and pollutes the numbers.
 
-CI pushes the image to the private registry on every main build, and `deploy/docker-compose.yml` runs sender and sink together on the generator box:
+## The control API
+
+Running a benchmark by redeploying a container per run gets old fast, so `udpbench serve` starts a long-running HTTP control plane. Deploy it once on the generator box and trigger every later run over HTTP:
 
 ```
 cd deploy
-TARGET=192.168.178.126:5000 docker compose up
+cp .env.example .env    # set UDPBENCH_API_TOKEN
+docker compose up -d
 ```
 
-Copy `deploy/.env.example` to `.env` to pin rate, payload size, durations and ports. The sender exits after its duration, the sink a few seconds later with the loss summary.
+CI pushes the image to the private registry on every main build, so `docker compose pull && docker compose up -d` picks up new versions.
+
+A run starts the sink in-process, blasts the target, and reports both summaries:
+
+```
+curl -X POST http://<generator>:5080/runs \
+  -H "Authorization: Bearer $UDPBENCH_API_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"target":"192.168.1.10:5000","size":32,"rate":250000,"sendDurationSeconds":30,"sinkPort":6000}'
+```
+
+| Endpoint          | Does                                                          |
+| ----------------- | ------------------------------------------------------------- |
+| `POST /runs`      | Starts a run, returns 202 with its id (409 if one is running)  |
+| `GET /runs/{id}`  | Status plus the send and sink summaries once completed         |
+| `GET /runs`       | Every run this process has seen, newest first                  |
+| `GET /healthz`    | Liveness; the only endpoint exempt from the bearer token       |
+
+Request fields: `target` (required), `size` (default 32), `rate` (packets per second, 0 = unthrottled), `sendDurationSeconds`, `sink` (default true), `sinkPort` (default 6000), `sinkDurationSeconds` (defaults to the send duration plus 5 s so the sink catches the tail).
+
+Only one run executes at a time, so a stray second request cannot corrupt a measurement in progress. Results live in memory and are lost on restart; copy anything worth keeping into the results table.
+
+Point the forwarder's `--to` at the generator box's `sinkPort` so the fan-out lands in the sink.
 
 ## Micro-benchmarks
 

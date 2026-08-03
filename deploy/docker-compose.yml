@@ -1,40 +1,31 @@
-# Traffic generator + measuring sink for a benchmark run, meant to run on
-# the generator box (the NAS). Both services use host networking; a bridge
-# network would add its own forwarding layer and pollute the measurement.
+# Remote-controllable traffic generator for the benchmark box (the NAS).
+# Deployed once and left running; benchmark runs are triggered over HTTP,
+# so measuring a new rung needs no redeploy.
 #
-# Usage (TARGET = the forwarder's listen endpoint on the device under test):
-#   TARGET=192.168.178.126:5000 docker compose up
+#   cp .env.example .env   # set UDPBENCH_API_TOKEN
+#   docker compose up -d
 #
-# Both services exit on their own: the sender after SEND_DURATION, the sink
-# after SINK_DURATION (kept longer so it catches the tail and prints its
-# loss summary last). Copy .env.example to .env to pin your own defaults.
+# Host networking is required: a bridge network would add its own
+# forwarding layer and pollute the measurement. It also means the control
+# API and the UDP sink bind directly to the host's ports.
 services:
-  sink:
+  udpbench:
     image: simondatastore:50000/udpbench:latest
     pull_policy: always
     network_mode: host
-    restart: "no"
+    restart: unless-stopped
+    environment:
+      # Leave empty to run without auth (only sane on a trusted LAN).
+      UDPBENCH_API_TOKEN: "${UDPBENCH_API_TOKEN:-}"
     command:
-      - sink
-      - --listen
-      - "${SINK_PORT:-6000}"
-      - --duration
-      - "${SINK_DURATION:-40}"
-
-  send:
-    image: simondatastore:50000/udpbench:latest
-    pull_policy: always
-    network_mode: host
-    restart: "no"
-    depends_on:
-      - sink
-    command:
-      - send
-      - --target
-      - "${TARGET:?set TARGET=<forwarder-host:port>}"
-      - --size
-      - "${SIZE:-32}"
-      - --rate
-      - "${RATE:-250000}"
-      - --duration
-      - "${SEND_DURATION:-30}"
+      - serve
+      - --port
+      - "${API_PORT:-5080}"
+    # The image has no curl/wget, so the healthcheck asks the API itself:
+    # `udpbench health` exits non-zero when /healthz does not answer.
+    healthcheck:
+      test: ["CMD", "dotnet", "UdpBench.dll", "health", "--port", "${API_PORT:-5080}"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

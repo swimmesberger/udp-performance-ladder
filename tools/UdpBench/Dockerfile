@@ -9,7 +9,7 @@ COPY Directory.Build.props .
 COPY tools/UdpBench tools/UdpBench
 RUN dotnet publish tools/UdpBench/UdpBench.csproj -c Release -o /app
 
-FROM mcr.microsoft.com/dotnet/runtime:10.0
+FROM mcr.microsoft.com/dotnet/aspnet:10.0
 WORKDIR /app
 COPY --from=build /app .
 ENTRYPOINT ["dotnet", "UdpBench.dll"]

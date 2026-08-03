@@ -3,4 +3,8 @@
     <OutputType>Exe</OutputType>
     <RootNamespace>UdpBench</RootNamespace>
   </PropertyGroup>
+  <ItemGroup>
+    <!-- Kestrel/minimal API for the `serve` control plane. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
 </Project>
