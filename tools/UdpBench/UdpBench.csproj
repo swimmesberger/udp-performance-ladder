@@ -2,6 +2,8 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <RootNamespace>UdpBench</RootNamespace>
+    <!-- Linux batched I/O (sendmmsg/recvmmsg interop). -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup>
     <!-- Kestrel/minimal API for the `serve` control plane. -->

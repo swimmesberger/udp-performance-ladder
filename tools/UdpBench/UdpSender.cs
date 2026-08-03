@@ -67,6 +67,14 @@ public static class UdpSender
         socket.SendBufferSize = 4 << 20;
         socket.Connect(options.Target);
 
+        if (OperatingSystem.IsLinux())
+        {
+            // Many datagrams per syscall; this is what lets the generator
+            // outrun the forwarders it measures.
+            LinuxBatchIo.SendLoop(socket, options, index, threads, counters, stopwatch, ct);
+            return;
+        }
+
         byte[] payload = new byte[options.Size];
         var duration = TimeSpan.FromSeconds(options.DurationSeconds);
         // Each thread owns one residue class of the sequence space, so the

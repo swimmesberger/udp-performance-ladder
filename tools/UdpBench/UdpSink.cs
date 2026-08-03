@@ -106,6 +106,12 @@ public static class UdpSink
 
     private static void ReceiveLoop(Socket socket, ThreadCounters counters, Func<bool> running)
     {
+        if (OperatingSystem.IsLinux())
+        {
+            LinuxBatchIo.ReceiveLoop(socket, counters, running);
+            return;
+        }
+
         byte[] buffer = GC.AllocateArray<byte>(65536, pinned: true);
         while (running())
         {
@@ -138,11 +144,12 @@ public static class UdpSink
         }
     }
 
-    private sealed class ThreadCounters
-    {
-        public long Packets;
-        public long Bytes;
-        public long MinSequence = long.MaxValue;
-        public long MaxSequence = -1;
-    }
+}
+
+internal sealed class ThreadCounters
+{
+    public long Packets;
+    public long Bytes;
+    public long MinSequence = long.MaxValue;
+    public long MaxSequence = -1;
 }
