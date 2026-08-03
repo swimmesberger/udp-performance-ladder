@@ -8,6 +8,7 @@ public sealed class ForwarderStats
     private long _receivedBytes;
     private long _forwardedPackets;
     private long _forwardedBytes;
+    private long _droppedPackets;
 
     public void PacketReceived(int bytes)
     {
@@ -21,11 +22,16 @@ public sealed class ForwarderStats
         Interlocked.Add(ref _forwardedBytes, bytes);
     }
 
-    public (long RxPackets, long RxBytes, long TxPackets, long TxBytes) Snapshot() => (
+    /// <summary>Forwarder-side drop (e.g. tx backpressure), counted so it is
+    /// never invisible the way an OS-level drop can be.</summary>
+    public void PacketDropped() => Interlocked.Increment(ref _droppedPackets);
+
+    public (long RxPackets, long RxBytes, long TxPackets, long TxBytes, long Dropped) Snapshot() => (
         Interlocked.Read(ref _receivedPackets),
         Interlocked.Read(ref _receivedBytes),
         Interlocked.Read(ref _forwardedPackets),
-        Interlocked.Read(ref _forwardedBytes));
+        Interlocked.Read(ref _forwardedBytes),
+        Interlocked.Read(ref _droppedPackets));
 }
 
 public sealed class StatsReporter : IDisposable
@@ -77,7 +83,7 @@ public sealed class StatsReporter : IDisposable
                 $"rx {rxPps,11:N0} pps {rxMbit,8:N1} Mbit/s | " +
                 $"tx {txPps,11:N0} pps {txMbit,8:N1} Mbit/s | " +
                 $"alloc {allocRate,7:N1} MB/s gen0 {gen0Delta,3} | " +
-                $"total rx {current.RxPackets:N0} tx {current.TxPackets:N0}");
+                $"total rx {current.RxPackets:N0} tx {current.TxPackets:N0} drop {current.Dropped:N0}");
             previous = current;
         }
     }

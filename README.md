@@ -10,7 +10,7 @@ One UDP port in, N destinations out. The forwarder is implemented repeatedly, ea
 | ---- | ---------------- | --------------------------------------------------------------- | ---------------------------- | ------- |
 | 1    | The naive loop   | `UdpClient`, one await per operation, fresh buffer per packet   | `src/Forwarder.Rung1.Naive`  | done    |
 | 2    | The frugal loop  | Raw `Socket`, pinned reused buffer, .NET 8 `SocketAddress` APIs | `src/Forwarder.Rung2.Frugal` | done    |
-| 3    | The batched kernel | Registered I/O (Windows) / io_uring (Linux)                   | planned                      | planned |
+| 3    | The batched kernel | Registered I/O (Windows) / io_uring (Linux)                   | `src/Forwarder.Rung3.Batched` | Windows done, io_uring planned |
 | 4    | The native rewrite | Rungs 2 and 3 in Rust                                         | `rust/`                      | planned |
 | 5    | The stack bypass | AF_XDP (Linux) / XDP-for-Windows                                | `xdp/`                       | planned |
 
