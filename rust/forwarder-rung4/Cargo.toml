@@ -1,0 +1,13 @@
+[package]
+name = "forwarder-rung4"
+version = "0.1.0"
+edition = "2021"
+
+# socket2 only for SO_RCVBUF before handing the socket to std; the ladder
+# aligns every rung at a 1 MB receive buffer.
+[dependencies]
+socket2 = "0.6"
+
+[profile.release]
+lto = true
+codegen-units = 1

@@ -222,3 +222,26 @@ rungs aligned at 1 MB):
 Aligned, rungs 1 and 2 are statistically identical in every column: the
 pure null result stands, and the burst-tolerance win belonged to the
 buffer, not the allocation work.
+
+## Rung 4: Rust, std sockets (same architecture as rung 2)
+
+Identical design: one thread, blocking recv_from, one send_to per
+destination, one reused buffer, destinations resolved once, aligned 1 MB
+receive buffer (socket2). Same harness, same profile, same protocol.
+
+| Offered | Rx loss | CPU (one core) | C# rung 2 CPU |
+| ------- | ------- | -------------- | ------------- |
+| 150,000 | 0.00%   | 55.2% | 71.9% |
+| 200,000 | 0.00%   | 75.9% | 88.0% |
+| 250,000 | 0.00%   | 92.2% | 95.6% |
+| 300,000 | 6.42%   | 100.9% | 101.2% (11.76% loss) |
+| 350,000 | 18.61%  | 101.1% (rx ~285k/s) | - |
+
+Reading: the runtime swap buys roughly 14-23% CPU at fixed load
+(3.8 us/datagram vs 4.4 at 200k) and ~10% intake ceiling (~285k vs
+~260k pps). Notably, C# on Registered I/O (rung 3: 50.8% / 63.1% CPU at
+150k/200k) still beats Rust on plain syscalls at every rate: the kernel
+interface is worth more than the language.
+
+Note: first wire attempt read 100% loss with 0% CPU; the Windows firewall
+had no rule for the new unsigned binary. Allow rule added, re-run.
