@@ -402,3 +402,49 @@ the harness grew a sink column. Open: diagnose tx injection (candidate
 causes: loopback packet-type classification of injected frames, or a
 frame the stack accepts and then drops above the driver). Until then,
 AF_PACKET is an rx-side result only.
+
+## AF_PACKET transmit: diagnosis so far (still open)
+
+Symptom: the engine receives and forwards correctly by its own counters,
+but a UDP sink on the destination port receives nothing.
+
+Established by experiment:
+- Frames are built and transmitted correctly. A second AF_PACKET instance
+  sniffing the destination port sees every frame, and with the
+  PACKET_OUTGOING filter applied it still sees them, so they are genuinely
+  looped back and observed as inbound at the tap.
+- They enter the IP receive path: /proc/net/snmp Ip.InReceives rises by
+  the injected count.
+- They are not malformed at L3: InHdrErrors, InCsumErrors, InAddrErrors,
+  InDiscards all stay flat.
+- They are never delivered: Ip.InDelivers does not move, Udp.NoPorts does
+  not move. So the drop is between ip_rcv_core and ip_local_deliver, i.e.
+  in the input route lookup, which drops martians with no SNMP counter.
+
+Mechanism (best current explanation): normal loopback traffic never takes
+that path. Locally generated packets carry the dst entry from the output
+route, so ip_rcv_finish skips ip_route_input entirely. An L2-injected
+frame has no dst, so it takes the full input-routing path, where a
+loopback source address is treated as martian.
+
+Fixes tried, none sufficient: binding the tx socket to ETH_P_IP rather
+than 0 (skb->protocol is stamped from the bound protocol, and
+ip_route_input_slow treats protocol != ETH_P_IP as martian source);
+enabling net.ipv4.conf.lo.route_localnet.
+
+Remaining candidates: netfilter/conntrack rules in the WSL2 host-network
+namespace, or a martian-source verdict that route_localnet does not cover.
+Next step when resumed: enable net.ipv4.conf.all.log_martians and read
+dmesg, which names the rejected source directly; or test on a veth pair
+with non-loopback addressing instead of lo.
+
+Real bugs found and fixed while chasing this:
+- sockaddr_ll sits at offset 48 in a tpacket3 frame (TPACKET_ALIGN of the
+  48-byte header), not 40; the PACKET_OUTGOING filter was reading a
+  garbage byte and never filtering.
+- The tx kick's return value was unchecked, so a rejected batch could pass
+  silently. Now throws on anything but EAGAIN.
+- The tx socket must be bound to ETH_P_IP for skb->protocol to be correct.
+
+Verdict for the article: AF_PACKET belongs with XDP in the raw-frame rung,
+and its numbers stay unpublished until a sink confirms delivery.

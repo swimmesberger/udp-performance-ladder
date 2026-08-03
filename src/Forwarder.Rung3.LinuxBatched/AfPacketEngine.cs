@@ -115,7 +115,11 @@ internal static unsafe partial class AfPacketEngine
         BindToInterface(rxFd, ifIndex, ETH_P_IP);
 
         // ---- TX: TPACKET_V2 frame ring on a second packet socket ----
-        int txFd = Libc.Socket(AF_PACKET, SOCK_RAW, 0);
+        // Bind the tx socket to ETH_P_IP, not 0: packet_snd stamps
+        // skb->protocol from the bound protocol, and the input route lookup
+        // treats skb->protocol != ETH_P_IP as a martian source and drops the
+        // frame before local delivery, with no SNMP counter to show for it.
+        int txFd = Libc.Socket(AF_PACKET, SOCK_RAW, System.Net.IPAddress.HostToNetworkOrder((short)ETH_P_IP) & 0xFFFF);
         if (txFd < 0) throw new InvalidOperationException($"tx packet socket failed: errno {Marshal.GetLastWin32Error()}");
         version = TPACKET_V2;
         Check(Libc.SetSockOpt(txFd, SOL_PACKET, PACKET_VERSION, &version, sizeof(int)), "PACKET_VERSION v2");
@@ -128,7 +132,7 @@ internal static unsafe partial class AfPacketEngine
         };
         Check(Libc.SetSockOpt(txFd, SOL_PACKET, PACKET_TX_RING, (int*)&txReq, (uint)sizeof(TpacketReq)), "PACKET_TX_RING");
         byte* txRing = MapRing(txFd, (nuint)TxFrames * FrameSize);
-        BindToInterface(txFd, ifIndex, 0);
+        BindToInterface(txFd, ifIndex, ETH_P_IP);
 
         // Destination header template fields.
         Span<byte> destIps = stackalloc byte[destinationCount * 4];
@@ -167,8 +171,10 @@ internal static unsafe partial class AfPacketEngine
 
                 // Loopback shows each datagram twice (outgoing + looped-back
                 // copy); process only the inbound one. sockaddr_ll follows
-                // tpacket3_hdr at +40; sll_pkttype is at +10 within it.
-                if (packet[40 + 10] == 4 /* PACKET_OUTGOING */)
+                // tpacket3_hdr at TPACKET_ALIGN(sizeof(tpacket3_hdr)) = 48
+                // (not 40: the struct's trailing 8 padding bytes count), and
+                // sll_pkttype sits 10 bytes into it.
+                if (packet[48 + 10] == 4 /* PACKET_OUTGOING */)
                 {
                     packet += nextOffset;
                     continue;
