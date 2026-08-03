@@ -245,3 +245,28 @@ interface is worth more than the language.
 
 Note: first wire attempt read 100% loss with 0% CPU; the Windows firewall
 had no rule for the new unsigned binary. Allow rule added, re-run.
+
+## Control: C# blocking loop (rung 2 --sync) vs Rust
+
+Rung 2's loop is async; rung 4's Rust loop blocks. Different dispatch
+model, not just a different language, so the Rust comparison owed a
+control: the same C# loop on .NET 8's synchronous SocketAddress overloads
+(Forwarder.Rung2.Frugal --sync).
+
+| Offered | Rust (blocking) | C# blocking | C# async |
+| ------- | --------------- | ----------- | -------- |
+| 150,000 | 55.2% | 59.1% | 71.9% |
+| 200,000 | 75.9% | 80.0% | 88.0% |
+| 250,000 | 92.2% | 98.3% | 95.6% |
+| 300,000 | 6.42% loss | 11.89% loss | 11.76% loss |
+
+Roughly two thirds of the apparent Rust win was the async dispatch
+machinery; the true language/runtime delta is ~5% (3.8 vs 4.0 us/datagram
+at 200k). The async penalty shrinks as load rises (saturated receives
+complete synchronously), converging by 250k. Both C# builds are Release;
+dynamic PGO is on by default in .NET 10 and the discarded warmup covers
+tiered JIT promotion; Rust built with lto=true, codegen-units=1.
+
+Updated CPU ranking at 200k pps: C# async 88% > C# blocking 80% >
+Rust blocking 76% > C# RIO 63%. Kernel interface > dispatch model >
+language.

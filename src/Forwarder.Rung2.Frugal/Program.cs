@@ -7,6 +7,11 @@ using System.Net;
 using System.Net.Sockets;
 using Forwarder.Core;
 
+// --sync runs the same loop with blocking calls instead of async/await:
+// the control for the rung 4 (Rust) comparison, whose loop also blocks.
+bool synchronous = args.Contains("--sync");
+args = args.Where(a => a != "--sync").ToArray();
+
 ForwarderOptions options;
 try
 {
@@ -41,8 +46,38 @@ Memory<byte> receiveMemory = buffer;
 var sender = new SocketAddress(AddressFamily.InterNetwork);
 
 Console.WriteLine(
-    $"rung 2 (frugal): listening on :{options.ListenPort}, " +
+    $"rung 2 (frugal{(synchronous ? ", sync" : "")}): listening on :{options.ListenPort}, " +
     $"forwarding to {destinations.Length} destination(s)");
+
+if (synchronous)
+{
+    // Blocking twin of the loop below; a receive timeout keeps Ctrl+C
+    // responsive (closing the socket does not reliably wake a blocked
+    // sync receive on every OS).
+    socket.ReceiveTimeout = 250;
+    Span<byte> span = buffer;
+    while (!cts.IsCancellationRequested)
+    {
+        int received;
+        try
+        {
+            received = socket.ReceiveFrom(span, SocketFlags.None, sender);
+        }
+        catch (SocketException e) when (e.SocketErrorCode == SocketError.TimedOut)
+        {
+            continue;
+        }
+        stats.PacketReceived(received);
+
+        ReadOnlySpan<byte> datagram = span[..received];
+        for (int i = 0; i < destinations.Length; i++)
+        {
+            socket.SendTo(datagram, SocketFlags.None, destinations[i]);
+            stats.PacketForwarded(received);
+        }
+    }
+    return 0;
+}
 
 try
 {
