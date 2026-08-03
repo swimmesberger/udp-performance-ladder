@@ -24,7 +24,7 @@ public class ReceivePathBenchmarks
 
     private byte[] _payload = null!;
 
-    [Params(32, 1200)]
+    [Params(32)]
     public int PayloadSize { get; set; }
 
     [GlobalSetup]
@@ -62,5 +62,34 @@ public class ReceivePathBenchmarks
     {
         await _rawSocket.SendToAsync(_payload, SocketFlags.None, _rawSocketSelf);
         return await _rawSocket.ReceiveFromAsync(_receiveBuffer, SocketFlags.None, _sender);
+    }
+
+    /// <summary>Send half of rung 2, to locate the residual allocation.</summary>
+    [Benchmark]
+    public async Task Rung2_SendOnly()
+    {
+        await _rawSocket.SendToAsync(_payload, SocketFlags.None, _rawSocketSelf);
+        // drain synchronously so the socket buffer does not fill
+        _rawSocket.ReceiveFrom(_receiveBuffer, SocketFlags.None, _sender);
+    }
+
+    /// <summary>Receive half of rung 2, to locate the residual allocation.</summary>
+    [Benchmark]
+    public async Task<int> Rung2_ReceiveOnly()
+    {
+        _rawSocket.SendTo(_payload, SocketFlags.None, _rawSocketSelf);
+        return await _rawSocket.ReceiveFromAsync(_receiveBuffer, SocketFlags.None, _sender);
+    }
+
+    /// <summary>
+    /// The same work with blocking calls: no async state machine at all.
+    /// The forwarder is a single serial loop pinned to one core anyway, so
+    /// this is a legitimate design, not just a benchmark curiosity.
+    /// </summary>
+    [Benchmark]
+    public int Rung2_FullySynchronous()
+    {
+        _rawSocket.SendTo(_payload, SocketFlags.None, _rawSocketSelf);
+        return _rawSocket.ReceiveFrom(_receiveBuffer, SocketFlags.None, _sender);
     }
 }

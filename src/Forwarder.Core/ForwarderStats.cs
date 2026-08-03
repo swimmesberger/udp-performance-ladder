@@ -44,6 +44,8 @@ public sealed class StatsReporter : IDisposable
     {
         var previous = stats.Snapshot();
         var stopwatch = Stopwatch.StartNew();
+        long previousAllocated = GC.GetTotalAllocatedBytes(precise: false);
+        int previousGen0 = GC.CollectionCount(0);
         while (!ct.IsCancellationRequested)
         {
             try
@@ -59,6 +61,13 @@ public sealed class StatsReporter : IDisposable
             double seconds = stopwatch.Elapsed.TotalSeconds;
             stopwatch.Restart();
 
+            long allocated = GC.GetTotalAllocatedBytes(precise: false);
+            int gen0 = GC.CollectionCount(0);
+            double allocRate = (allocated - previousAllocated) / seconds / 1_000_000;
+            int gen0Delta = gen0 - previousGen0;
+            previousAllocated = allocated;
+            previousGen0 = gen0;
+
             double rxPps = (current.RxPackets - previous.RxPackets) / seconds;
             double rxMbit = (current.RxBytes - previous.RxBytes) * 8 / seconds / 1_000_000;
             double txPps = (current.TxPackets - previous.TxPackets) / seconds;
@@ -67,6 +76,7 @@ public sealed class StatsReporter : IDisposable
             Console.WriteLine(
                 $"rx {rxPps,11:N0} pps {rxMbit,8:N1} Mbit/s | " +
                 $"tx {txPps,11:N0} pps {txMbit,8:N1} Mbit/s | " +
+                $"alloc {allocRate,7:N1} MB/s gen0 {gen0Delta,3} | " +
                 $"total rx {current.RxPackets:N0} tx {current.TxPackets:N0}");
             previous = current;
         }
