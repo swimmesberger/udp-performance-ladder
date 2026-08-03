@@ -291,3 +291,18 @@ task on current_thread is tokio's best case.
 
 Updated 200k ranking: C# async 88% > C# blocking 80% > tokio 79% >
 Rust blocking 76% > C# RIO 63%.
+
+## Corrections and plan notes (accuracy pass)
+
+- The tokio-vs-.NET mechanism claims were tightened: the Rust state machine
+  is stack-pinned *in this program's shape* (block_on; a spawned task is one
+  heap allocation), and .NET skips the IOCP round trip on synchronously
+  completing operations (FILE_SKIP_COMPLETION_PORT_ON_SUCCESS), which is
+  the mechanism behind the async tax fading at saturation. The 10-15%
+  measured at moderate load is the cost of actual suspensions.
+- Rung 3 Linux plan revised to a three-way race: plain loop vs
+  sendmmsg/recvmmsg vs io_uring. Rationale: the generator's own mmsg path
+  does >1.3M pps in a container, so batch-per-syscall may capture most of
+  the ring win at far lower complexity; io_uring additionally is blocked by
+  default container seccomp profiles, which matters for containerized
+  deployment and for this project's own Linux test environment.
