@@ -632,3 +632,25 @@ Odd datum for completeness: mmsg does 200k at ~36% here but capped at
 ~61k/core in the container-loopback race. Arrival batching differs
 (NIC-coalesced bursts batch recvmmsg efficiently; loopback wakes per
 packet), another instance of the arrival-pattern lesson.
+
+## Rust + RIO: the wins stack, exactly as predicted
+
+Prediction on record before the port: language delta measured ~5% on
+identical architecture, so Rust+RIO should land near 60% at 200k against
+C# RIO's 63.1%. Measured (same harness, same NIC-hygiene config, 8-thread
+batched generator, 10 s runs, warmed):
+
+| Offered | Rust RIO rx loss | Rust RIO CPU | C# RIO (loss / CPU) |
+| ------- | ---------------- | ------------ | ------------------- |
+| 150,000 | 0.00% | 47.5% | 0.00% / 50.8% |
+| 200,000 | 0.00% | 58.0% | 0.28% / 63.1% |
+| 250,000 | 0.00% | 78.8% | 1.81% / 80.5% |
+| 300,000 | 0.00% | 89.2% | 6.41% / 88.6% |
+| 350,000 | 4.04% | 98.4% | - |
+
+58.0% measured vs ~60% predicted: the effects are additive, no compounding.
+Rust+RIO is also cleaner at the top: 0.00% loss at 300k where C# RIO shed
+6.41%, intake holding to ~336k/s at 350k offered. New best on the ladder,
+by the margin the model said it would be and no more. The ordering stands
+confirmed by construction: interface first (25-30%), dispatch model second
+(10-15%), language last (~5%).
