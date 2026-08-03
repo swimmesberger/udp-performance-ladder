@@ -665,3 +665,46 @@ are the buffering; the socket buffer is bypassed), the option is a no-op,
 so the Rust-vs-C# comparison was already fair. The setting stays in both
 engines so the ladder's alignment is uniform by construction rather than
 by argument.
+
+## Can Linux and Windows be compared? Same C# code, both OSes
+
+The one portable comparison: identical Forwarder.Rung2.Frugal (plain .NET
+sockets) at 200k pps, Windows bare metal vs Linux (WSL mirrored adapter).
+
+| Dispatch | Windows (bare metal) | Linux (virtualized) |
+| -------- | -------------------- | ------------------- |
+| blocking (sync) | 80% of one core | ~43% |
+| async (epoll/IOCP) | 88% | ~131% (1.3 cores) |
+
+Two findings, one correction:
+
+1. **The OS effect is not single-signed.** Same code: Linux is far
+   CHEAPER blocking (43 vs 80) and far MORE EXPENSIVE async (131 vs 88).
+   So "the kernel has the biggest effect" cannot be stated cleanly - the
+   sign flips with the dispatch model. And it is confounded two ways that
+   pull opposite directions: virtualization inflates the Linux cost, while
+   softirq receive processing (unbilled to the Linux process) deflates it.
+
+2. **CORRECTION to the earlier section.** I wrote that the Linux engines'
+   lower app CPU vs Windows RIO was "a one-sided bound in their favor."
+   That was wrong: it ignored the softirq exclusion, which deflates the
+   Linux number, so the cross-OS figures are not a clean bound in either
+   direction. Same-OS rankings stand; cross-OS ones do not.
+
+3. **.NET async sockets on Linux are genuinely bad for this workload**:
+   1.3 cores to forward 200k pps, 3x the blocking path, matching the
+   container race where the epoll engine collapsed. This IS a clean
+   within-Linux result (process CPU, same environment).
+
+## The hierarchy, stated honestly
+
+- Interface, dispatch, language CAN be ranked (measured on identical
+  hardware within each OS): interface ~25-30% > dispatch ~10-15% (up to 3x
+  on Linux async) > language ~5%.
+- The OS/kernel CANNOT be added as a clean 4th axis, for two reasons:
+  (a) the fast interfaces ARE the kernel - RIO is Windows-only, io_uring/
+  GSO/XDP are Linux-only, so "which kernel" and "which interface" are the
+  same choice; you can only hold interface constant with plain BSD sockets;
+  (b) that one portable comparison is confounded and sign-flipping (above).
+- So the real top of the hierarchy is a single fused axis, "the kernel
+  interface," then dispatch model, then language.
