@@ -95,7 +95,11 @@ curl -X POST http://<generator>:5390/runs \
 | `GET /runs`       | Every run this process has seen, newest first                  |
 | `GET /healthz`    | Liveness; the only endpoint exempt from the bearer token       |
 
-Request fields: `target` (required), `size` (default 32), `rate` (packets per second, 0 = unthrottled), `sendDurationSeconds`, `sink` (default true), `sinkPort` (default 6000), `sinkDurationSeconds` (defaults to the send duration plus 5 s so the sink catches the tail).
+Request fields: `target` (required), `size` (default 32), `rate` (packets per second, 0 = unthrottled), `sendDurationSeconds`, `threads` (sender threads, default 1), `sink` (default true), `sinkPort` (default 6000), `sinkDurationSeconds` (defaults to the send duration plus 5 s so the sink catches the tail).
+
+Read loss from the response's `loss` object, which compares the sender's and sink's counts directly. The sink's own `lossPercent` is derived from sequence gaps alone, which is what a standalone sink has to do, but it over-reports by a fraction of a percent when several sender threads stop at slightly different points.
+
+**One thread cannot saturate a fast link.** A single loop pays one syscall per packet and tops out in the low hundreds of thousands of packets per second on good hardware, far less on a NAS. Raise `threads` until the generator's own rate stops climbing, and confirm it comfortably exceeds the forwarder you are measuring; otherwise you are benchmarking the generator.
 
 Only one run executes at a time, so a stray second request cannot corrupt a measurement in progress. Results live in memory and are lost on restart; copy anything worth keeping into the results table.
 

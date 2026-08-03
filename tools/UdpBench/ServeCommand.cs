@@ -180,6 +180,7 @@ public sealed record RunRequest(
     int Size = 32,
     long Rate = 0,
     int SendDurationSeconds = 10,
+    int Threads = 1,
     bool Sink = true,
     int SinkPort = 6000,
     int? SinkDurationSeconds = null);
@@ -216,7 +217,8 @@ public sealed class BenchmarkRun
                     await Task.Delay(500); // let the sink bind before load starts
                 }
 
-                var sendOptions = new SendOptions(target, request.Size, request.Rate, request.SendDurationSeconds);
+                var sendOptions = new SendOptions(
+                    target, request.Size, request.Rate, request.SendDurationSeconds, request.Threads);
                 SendResult send = await Task.Run(
                     () => UdpSender.Run(sendOptions, progress: null, CancellationToken.None));
                 SinkResult? sink = sinkTask is null ? null : await sinkTask;
@@ -260,6 +262,22 @@ public sealed class BenchmarkRun
                 request = _request,
                 send = _send,
                 sink = _sink,
+                // Authoritative loss: the service owns both ends, so it
+                // compares counts directly. The sink's own span-based figure
+                // over-reports slightly with several sender threads, because
+                // they stop at slightly different points and leave the
+                // sequence space ragged at the tail.
+                loss = _send is null || _sink is null
+                    ? null
+                    : new
+                    {
+                        sent = _send.PacketsSent,
+                        received = _sink.Packets,
+                        lost = _send.PacketsSent - _sink.Packets,
+                        percent = _send.PacketsSent == 0
+                            ? 0
+                            : 100.0 * (_send.PacketsSent - _sink.Packets) / _send.PacketsSent,
+                    },
             };
         }
     }

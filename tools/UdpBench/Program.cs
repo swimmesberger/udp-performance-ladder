@@ -29,7 +29,8 @@ static int PrintUsage()
     Console.Error.WriteLine(
         """
         usage:
-          udpbench send --target <host:port> [--size <bytes>] [--rate <pps>] [--duration <seconds>]
+          udpbench send --target <host:port> [--size <bytes>] [--rate <pps>]
+                        [--duration <seconds>] [--threads <n>]
           udpbench sink --listen <port> [--duration <seconds>]
           udpbench serve [--port <port>]
           udpbench health [--port <port>]
@@ -38,6 +39,8 @@ static int PrintUsage()
           --size      UDP payload bytes, minimum 8 (default 32)
           --rate      packets per second; 0 = unthrottled (default 0)
           --duration  seconds to run; 0 = until Ctrl+C (default 10)
+          --threads   sender threads, each with its own socket (default 1);
+                      one thread cannot saturate a fast link
 
         sink options:
           --duration  seconds to run before printing the summary;
@@ -56,6 +59,7 @@ static int RunSend(string[] args)
     int size = 32;
     long rate = 0;
     int durationSeconds = 10;
+    int threads = 1;
 
     for (int i = 0; i < args.Length; i++)
     {
@@ -72,6 +76,9 @@ static int RunSend(string[] args)
                 break;
             case "--duration":
                 durationSeconds = int.Parse(args[++i]);
+                break;
+            case "--threads":
+                threads = int.Parse(args[++i]);
                 break;
             default:
                 Console.Error.WriteLine($"unknown argument '{args[i]}'");
@@ -102,10 +109,11 @@ static int RunSend(string[] args)
     Console.WriteLine(
         $"sending to {endpoint}, payload {size} B, " +
         $"rate {(rate == 0 ? "unthrottled" : $"{rate:N0} pps")}, " +
-        $"duration {(durationSeconds == 0 ? "until Ctrl+C" : $"{durationSeconds} s")}");
+        $"duration {(durationSeconds == 0 ? "until Ctrl+C" : $"{durationSeconds} s")}, " +
+        $"{threads} thread(s)");
 
     SendResult result = UdpSender.Run(
-        new SendOptions(endpoint, size, rate, durationSeconds), Console.WriteLine, cts.Token);
+        new SendOptions(endpoint, size, rate, durationSeconds, threads), Console.WriteLine, cts.Token);
 
     Console.WriteLine(
         $"done: {result.PacketsSent:N0} packets in {result.Seconds:N1} s " +
