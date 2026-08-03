@@ -553,3 +553,24 @@ itself the deployment reality check the chapter promised.
 Trap to guard against: AF_XDP silently falls back to generic/SKB mode on
 unsupported drivers. Any run must assert it got the mode it asked for
 (XDP_FLAGS_DRV_MODE) rather than accept a plausible-looking number.
+
+### Verdict: no XDP-capable NIC available
+
+NAS interfaces report driver r8168 (Realtek's out-of-tree driver) on both
+eth0 and eth1. Neither r8168 nor the in-kernel r8169 implements the XDP
+hook, and the workstation's Realtek 2.5GbE has no NDIS XDP extensions on
+Windows. Every candidate in the environment is therefore generic-mode
+only, which is not a publishable XDP result.
+
+Rung 5 options:
+1. Write it as a documented limitation, backed by this evidence. The rung
+   requires driver support commodity hardware does not provide.
+2. Unlock it with hardware: an Intel-based NIC (igc/igb/i350/X520 class)
+   is inexpensive and gives native XDP on Linux.
+3. Unlock it in the cloud: AWS ENA and GCP gVNIC implement native XDP, so
+   two instances would give a genuine driver-mode measurement in an
+   environment where both peers are equally virtualized.
+
+AF_PACKET keeps its place in this rung precisely because it needs none of
+that: raw frames, no eBPF, no driver support, and it is already verified
+forwarding on a real link here.
