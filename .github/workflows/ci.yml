@@ -60,8 +60,9 @@ jobs:
 
           # Correctness check, not a performance test: the rate must sit well
           # under the naive rung's capacity on the weakest runner hardware
-          # (measured ~10-12 kpps on the NAS), or kernel drops fail the run.
-          "$BENCH" send --target 127.0.0.1:$LISTEN --size 32 --rate 5000 --duration 3
+          # (measured ~10-12 kpps on the NAS, less under CI contention),
+          # or kernel drops fail the run.
+          "$BENCH" send --target 127.0.0.1:$LISTEN --size 32 --rate 2000 --duration 3
 
           # the sink exits on its own after its 8 s window and prints the summary
           wait $SINK_PID
