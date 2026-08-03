@@ -7,6 +7,5 @@ edition = "2021"
 socket2 = "0.6"
 tokio = { version = "1", features = ["rt", "net", "macros"] }
 
-[profile.release]
-lto = true
-codegen-units = 1
+# The release profile (lto, codegen-units) lives in the workspace root
+# Cargo.toml; cargo ignores member-level profile sections.
