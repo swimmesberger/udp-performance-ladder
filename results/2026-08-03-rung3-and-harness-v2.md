@@ -340,3 +340,15 @@ Findings:
 Caveats: loopback arrival pattern, WSL2 virtualization, and an io_uring
 implementation using one enter per completion batch. Treat as a ranking,
 not as capacity numbers.
+
+### Why mmsg's win should survive io_uring tuning (assessment)
+
+Both interfaces run the same kernel per-datagram UDP path and both already
+amortize the user-kernel transition, so the contest is per-packet wrapper
+cost: a bare loop (mmsg) vs ring bookkeeping + io_kiocb + task work
+(io_uring). Available levers for the port: multishot recvmsg + provided
+buffer rings (removes per-packet submission; plausibly reaches parity),
+SQPOLL (removes the last syscall but burns a dedicated core; a loss on
+pps/core), registered buffers / SEND_ZC (large payloads only). io_uring's
+structural advantages (mixed I/O, chaining, zero-copy sends) go unused by
+tiny-datagram fan-out. Prediction if a rematch is run: parity +/- 10%.
