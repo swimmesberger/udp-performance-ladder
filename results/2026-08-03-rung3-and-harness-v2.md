@@ -80,3 +80,25 @@ Ladder with decoupled pools (8 sender threads, 10 s runs, warmed):
   ~1-2% of zero are within run-to-run variance.
 - Sink-delivered numbers above ~220k pps are harness-limited and not
   reported as forwarder loss anywhere here.
+
+## Revision: zero-copy slot rotation
+
+The decoupled-pool fix above paid one memcpy per packet. Unnecessary: a single
+pre-allocated pool whose slots rotate roles keeps zero-copy AND the guarantee.
+Each receive completion posts exactly one replacement receive from the free
+pool and sends directly from the filled slot (returned to the pool when its
+sends complete); if the pool is empty, the filled slot itself is reposted and
+that one datagram is dropped on the forwarder's own counter. Posted receives
+are constant by construction.
+
+| Offered | Rx loss | Forwarded (tx) | CPU (one core) |
+| ------- | ------- | -------------- | -------------- |
+| 200,000 | 0.80%   | 198,400/s      | 66.1% |
+| 250,000 | 0.00%   | 250,000/s      | 87.3% |
+| 300,000 | 0.90%   | 275,900/s      | 95.5% |
+| 350,000 | 2.56%   | 272,000/s      | 94.2% |
+
+Receive side improves markedly at overload (350k: 10.12% -> 2.56% rx loss);
+the tx ceiling stays ~276k/s (one RIOSendEx post per packet). Note: still
+zero heap allocation in steady state in all rung 3 variants; the memcpy in
+the interim design was a bandwidth cost, not an allocation.

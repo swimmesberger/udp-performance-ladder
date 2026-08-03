@@ -15,8 +15,8 @@ namespace Forwarder.Rung3;
 /// </summary>
 internal sealed unsafe class RioForwarder
 {
-    private const int ReceiveSlots = 4096;
-    private const int SendSlots = 8192;
+    private const int PoolSlots = 12288;       // rotating: receive -> send -> free
+    private const int PostedReceives = 4096;   // held constant by construction
     private const int SlotSize = 2048;         // fits any non-jumbo datagram
     private const int AddrStride = 32;         // SOCKADDR_INET is 28, keep slots aligned
     private const int DequeueBatch = 256;
@@ -33,20 +33,22 @@ internal sealed unsafe class RioForwarder
     private IntPtr _event;
     private byte* _memory;
 
-    // Receive slots repost immediately after the payload is copied out, so
-    // the posted-receive ring can never starve. Send slots are a separate
-    // pool; running out means we drop here, visibly, instead of RIO dropping
-    // invisibly on an empty receive ring (no OS counter records those).
-    private readonly int[] _pendingSends = new int[SendSlots];
-    private readonly int[] _freeSendSlots = new int[SendSlots];
-    private int _freeSendSlotCount;
+    // One pool; slots rotate roles: posted as a receive, then (holding data)
+    // sent from directly, then returned to the free stack. Every receive
+    // completion posts exactly one replacement receive, normally a free slot
+    // so the just-filled slot can be sent from with zero copies. If the free
+    // stack is empty (tx backpressure), the filled slot itself is reposted:
+    // that one datagram is dropped on our own counter, and the posted-receive
+    // count never shrinks, so RIO can never drop invisibly on an empty ring
+    // (no OS counter records those).
+    private readonly int[] _pendingSends = new int[PoolSlots];
+    private readonly int[] _freeSlots = new int[PoolSlots];
+    private int _freeSlotCount;
 
-    private static int ReceiveDataOffset(int slot) => slot * SlotSize;
-    private static int SendDataOffset(int slot) => ReceiveSlots * SlotSize + slot * SlotSize;
-    private static int ReceiveAddrOffset(int slot) =>
-        (ReceiveSlots + SendSlots) * SlotSize + slot * AddrStride;
+    private static int DataOffset(int slot) => slot * SlotSize;
+    private static int AddrOffset(int slot) => PoolSlots * SlotSize + slot * AddrStride;
     private static int DestinationAddrOffset(int index) =>
-        (ReceiveSlots + SendSlots) * SlotSize + ReceiveSlots * AddrStride + index * AddrStride;
+        PoolSlots * SlotSize + PoolSlots * AddrStride + index * AddrStride;
 
     public RioForwarder(ForwarderOptions options, ForwarderStats stats)
     {
@@ -76,8 +78,8 @@ internal sealed unsafe class RioForwarder
 
         _rio = Rio.LoadFunctionTable(_socket);
 
-        int memorySize = (ReceiveSlots + SendSlots) * SlotSize
-            + ReceiveSlots * AddrStride
+        int memorySize = PoolSlots * SlotSize
+            + PoolSlots * AddrStride
             + destinationCount * AddrStride;
         _memory = (byte*)NativeMemory.AllocZeroed((nuint)memorySize);
 
@@ -100,7 +102,7 @@ internal sealed unsafe class RioForwarder
             NotifyReset = 1,
         };
 
-        uint completionQueueSize = (uint)(ReceiveSlots + SendSlots * destinationCount);
+        uint completionQueueSize = (uint)(PostedReceives + (PoolSlots - PostedReceives) * destinationCount);
         _completionQueue = _rio.RIOCreateCompletionQueue(completionQueueSize, &notification);
         if (_completionQueue == IntPtr.Zero)
         {
@@ -111,23 +113,22 @@ internal sealed unsafe class RioForwarder
         //       maxOutstandingSend, maxSendDataBuffers, receiveCQ, sendCQ, context
         _requestQueue = _rio.RIOCreateRequestQueue(
             _socket,
-            ReceiveSlots, 1,
-            (uint)(SendSlots * destinationCount), 1,
+            PostedReceives, 1,
+            (uint)((PoolSlots - PostedReceives) * destinationCount), 1,
             _completionQueue, _completionQueue, null);
         if (_requestQueue == IntPtr.Zero)
         {
             throw new InvalidOperationException($"RIOCreateRequestQueue failed: {Rio.WSAGetLastError()}");
         }
 
-        for (int slot = 0; slot < ReceiveSlots; slot++)
+        for (int slot = 0; slot < PostedReceives; slot++)
         {
             PostReceive(slot);
         }
-        for (int slot = 0; slot < SendSlots; slot++)
+        for (int slot = PostedReceives; slot < PoolSlots; slot++)
         {
-            _freeSendSlots[slot] = slot;
+            _freeSlots[_freeSlotCount++] = slot;
         }
-        _freeSendSlotCount = SendSlots;
 
         var results = stackalloc RioResult[DequeueBatch];
         while (!ct.IsCancellationRequested)
@@ -160,45 +161,44 @@ internal sealed unsafe class RioForwarder
                 ref RioResult result = ref results[i];
                 if ((result.RequestContext & SendContextBit) != 0)
                 {
-                    int sendSlot = (int)(result.RequestContext & ~SendContextBit);
+                    int slot = (int)(result.RequestContext & ~SendContextBit);
                     if (result.Status == 0)
                     {
                         _stats.PacketForwarded((int)result.BytesTransferred);
                     }
-                    if (--_pendingSends[sendSlot] == 0)
+                    if (--_pendingSends[slot] == 0)
                     {
-                        _freeSendSlots[_freeSendSlotCount++] = sendSlot;
+                        _freeSlots[_freeSlotCount++] = slot;
                     }
                 }
                 else
                 {
-                    int receiveSlot = (int)result.RequestContext;
+                    int slot = (int)result.RequestContext;
                     if (result.Status != 0)
                     {
-                        PostReceive(receiveSlot); // e.g. a truncated datagram; recycle
+                        PostReceive(slot); // e.g. a truncated datagram; recycle
                         continue;
                     }
                     _stats.PacketReceived((int)result.BytesTransferred);
 
-                    if (_freeSendSlotCount > 0)
+                    if (_freeSlotCount > 0)
                     {
-                        int sendSlot = _freeSendSlots[--_freeSendSlotCount];
-                        Buffer.MemoryCopy(
-                            _memory + ReceiveDataOffset(receiveSlot),
-                            _memory + SendDataOffset(sendSlot),
-                            SlotSize, result.BytesTransferred);
-                        _pendingSends[sendSlot] = destinationCount;
+                        // Replacement receive comes from the free pool; the
+                        // filled slot is sent from directly, zero copies.
+                        PostReceive(_freeSlots[--_freeSlotCount]);
+                        _pendingSends[slot] = destinationCount;
                         for (int d = 0; d < destinationCount; d++)
                         {
-                            PostSend(sendSlot, result.BytesTransferred, d);
+                            PostSend(slot, result.BytesTransferred, d);
                         }
                     }
                     else
                     {
-                        _stats.PacketDropped(); // tx backpressure, counted here
+                        // Tx backpressure: drop this datagram on our counter
+                        // and recycle its slot as the replacement receive.
+                        _stats.PacketDropped();
+                        PostReceive(slot);
                     }
-
-                    PostReceive(receiveSlot); // the ring never starves
                 }
             }
         }
@@ -209,13 +209,13 @@ internal sealed unsafe class RioForwarder
         var data = new RioBuf
         {
             BufferId = _bufferId,
-            Offset = (uint)ReceiveDataOffset(slot),
+            Offset = (uint)DataOffset(slot),
             Length = SlotSize,
         };
         var remote = new RioBuf
         {
             BufferId = _bufferId,
-            Offset = (uint)ReceiveAddrOffset(slot),
+            Offset = (uint)AddrOffset(slot),
             Length = Rio.SockAddrInetSize,
         };
         if (_rio.RIOReceiveEx(_requestQueue, &data, 1, null, &remote, null, null, 0, (void*)(nuint)slot) == 0)
@@ -224,12 +224,12 @@ internal sealed unsafe class RioForwarder
         }
     }
 
-    private void PostSend(int sendSlot, uint length, int destination)
+    private void PostSend(int slot, uint length, int destination)
     {
         var data = new RioBuf
         {
             BufferId = _bufferId,
-            Offset = (uint)SendDataOffset(sendSlot),
+            Offset = (uint)DataOffset(slot), // sent straight from the receive slot
             Length = length,
         };
         var remote = new RioBuf
@@ -238,13 +238,13 @@ internal sealed unsafe class RioForwarder
             Offset = (uint)DestinationAddrOffset(destination),
             Length = Rio.SockAddrInetSize,
         };
-        ulong context = (uint)sendSlot | SendContextBit;
+        ulong context = (uint)slot | SendContextBit;
         if (_rio.RIOSendEx(_requestQueue, &data, 1, null, &remote, null, null, 0, (void*)(nuint)context) == 0)
         {
             // Count the send as finished so the slot is not leaked.
-            if (--_pendingSends[sendSlot] == 0)
+            if (--_pendingSends[slot] == 0)
             {
-                _freeSendSlots[_freeSendSlotCount++] = sendSlot;
+                _freeSlots[_freeSlotCount++] = slot;
             }
         }
     }
