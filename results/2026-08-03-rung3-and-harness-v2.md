@@ -306,3 +306,37 @@ Rust blocking 76% > C# RIO 63%.
   the ring win at far lower complexity; io_uring additionally is blocked by
   default container seccomp profiles, which matters for containerized
   deployment and for this project's own Linux test environment.
+
+## The Linux race: plain loops vs mmsg vs io_uring
+
+Environment: container on the local podman machine (WSL2 kernel 6.6.87,
+16 vCPUs, .NET 10.0.10), generator/sink/forwarder all over container
+loopback. Absolute numbers are ~5x below bare-metal Windows on the same
+hardware (virtualized syscall path); only the relative comparison on this
+identical footing is meaningful. Sustained per-engine ceilings, engine
+saturated, 10 s windows:
+
+| Engine | Ceiling (pps) | CPU while saturated | pps per core |
+| ------ | ------------- | ------------------- | ------------ |
+| rung 2 async (epoll, .NET native path) | ~26,000  | 237% (multi-core) | ~11,000 |
+| rung 2 --sync (emulated over epoll)    | ~50,000  | 100% | ~50,000 |
+| mmsg batching                          | ~65,000-80,000 | 100% | ~65,000-80,000 |
+| io_uring (this port)                   | ~55,000  | 100% | ~55,000 |
+
+Findings:
+1. **mmsg beats io_uring for this workload**, by ~20-45%. The skeptical
+   question ("is io_uring even the fastest option here?") is answered:
+   not in this straightforward port. Unused io_uring modes (multishot
+   recvmsg, SQPOLL, registered buffers) might reverse it; unmeasured.
+2. **Default container seccomp blocks io_uring outright** (io_uring_setup
+   fails; the engine cannot start without seccomp=unconfined). mmsg runs
+   everywhere.
+3. **.NET's async socket engine collapses under overload on this Linux
+   loopback**: 2.4 cores burned to deliver ~26k pps, worse per core than
+   every other lane by 5x. Its sync path (a poll+recv emulation over the
+   same engine) does ~50k on one core.
+4. All engines forwarded everything they received (fwd_tx == fwd_rx).
+
+Caveats: loopback arrival pattern, WSL2 virtualization, and an io_uring
+implementation using one enter per completion batch. Treat as a ranking,
+not as capacity numbers.
