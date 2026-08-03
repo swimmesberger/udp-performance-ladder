@@ -92,4 +92,36 @@ public class ReceivePathBenchmarks
         _rawSocket.SendTo(_payload, SocketFlags.None, _rawSocketSelf);
         return _rawSocket.ReceiveFrom(_receiveBuffer, SocketFlags.None, _sender);
     }
+
+    private const int Batch = 1000;
+
+    // The benchmarks above call one async method per operation, so each
+    // operation pays for its own state machine box. A forwarder runs its loop
+    // inside a single long-lived async method. OperationsPerInvoke reproduces
+    // that: one invocation, Batch datagrams, results divided by Batch.
+
+    [Benchmark(OperationsPerInvoke = Batch)]
+    public async Task<int> Rung1_UdpClient_Loop()
+    {
+        int last = 0;
+        for (int i = 0; i < Batch; i++)
+        {
+            await _udpClient.SendAsync(_payload, _udpClientSelf);
+            UdpReceiveResult result = await _udpClient.ReceiveAsync();
+            last = result.Buffer.Length;
+        }
+        return last;
+    }
+
+    [Benchmark(OperationsPerInvoke = Batch)]
+    public async Task<int> Rung2_RawSocket_Loop()
+    {
+        int last = 0;
+        for (int i = 0; i < Batch; i++)
+        {
+            await _rawSocket.SendToAsync(_payload, SocketFlags.None, _rawSocketSelf);
+            last = await _rawSocket.ReceiveFromAsync(_receiveBuffer, SocketFlags.None, _sender);
+        }
+        return last;
+    }
 }
