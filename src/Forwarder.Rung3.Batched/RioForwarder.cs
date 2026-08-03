@@ -54,14 +54,14 @@ internal sealed unsafe class RioForwarder
             IntPtr.Zero, 0, Rio.WsaFlagOverlapped | Rio.WsaFlagRegisteredIo);
         if (_socket == Rio.InvalidSocket)
         {
-            throw new InvalidOperationException($"WSASocketW failed: {Rio.WSAGetLastError()}");
+            throw new InvalidOperationException($"WSASocketW failed: {System.Runtime.InteropServices.Marshal.GetLastWin32Error()}");
         }
 
         byte* bindAddr = stackalloc byte[Rio.SockAddrInetSize];
         Rio.WriteSockAddr(bindAddr, new IPEndPoint(IPAddress.Any, _options.ListenPort));
         if (Rio.Bind(_socket, bindAddr, Rio.SockAddrInetSize) != 0)
         {
-            throw new InvalidOperationException($"bind failed: {Rio.WSAGetLastError()}");
+            throw new InvalidOperationException($"bind failed: {System.Runtime.InteropServices.Marshal.GetLastWin32Error()}");
         }
 
         _rio = Rio.LoadFunctionTable(_socket);
@@ -76,7 +76,7 @@ internal sealed unsafe class RioForwarder
             Rio.WriteSockAddr(_memory + DestinationAddrOffset(i), _options.Destinations[i]);
         }
 
-        _bufferId = _rio.RegisterBuffer(_memory, (uint)memorySize);
+        _bufferId = _rio.RIORegisterBuffer(_memory, (uint)memorySize);
         if (_bufferId == Rio.InvalidBufferId)
         {
             throw new InvalidOperationException($"RIORegisterBuffer failed: {Rio.WSAGetLastError()}");
@@ -91,7 +91,7 @@ internal sealed unsafe class RioForwarder
         };
 
         uint completionQueueSize = (uint)(ReceiveSlots + ReceiveSlots * destinationCount);
-        _completionQueue = _rio.CreateCompletionQueue(completionQueueSize, &notification);
+        _completionQueue = _rio.RIOCreateCompletionQueue(completionQueueSize, &notification);
         if (_completionQueue == IntPtr.Zero)
         {
             throw new InvalidOperationException($"RIOCreateCompletionQueue failed: {Rio.WSAGetLastError()}");
@@ -99,7 +99,7 @@ internal sealed unsafe class RioForwarder
 
         // args: socket, maxOutstandingReceive, maxReceiveDataBuffers,
         //       maxOutstandingSend, maxSendDataBuffers, receiveCQ, sendCQ, context
-        _requestQueue = _rio.CreateRequestQueue(
+        _requestQueue = _rio.RIOCreateRequestQueue(
             _socket,
             ReceiveSlots, 1,
             (uint)(ReceiveSlots * destinationCount), 1,
@@ -117,7 +117,7 @@ internal sealed unsafe class RioForwarder
         var results = stackalloc RioResult[DequeueBatch];
         while (!ct.IsCancellationRequested)
         {
-            uint count = _rio.DequeueCompletion(_completionQueue, results, DequeueBatch);
+            uint count = _rio.RIODequeueCompletion(_completionQueue, results, DequeueBatch);
             if (count == Rio.CorruptCompletionQueue)
             {
                 throw new InvalidOperationException("RIO completion queue corrupt");
@@ -127,8 +127,8 @@ internal sealed unsafe class RioForwarder
             {
                 // Queue is dry: arm the kernel notification, re-check for the
                 // completion that may have landed in between, then sleep.
-                _rio.Notify(_completionQueue);
-                count = _rio.DequeueCompletion(_completionQueue, results, DequeueBatch);
+                _rio.RIONotify(_completionQueue);
+                count = _rio.RIODequeueCompletion(_completionQueue, results, DequeueBatch);
                 if (count == Rio.CorruptCompletionQueue)
                 {
                     throw new InvalidOperationException("RIO completion queue corrupt");
@@ -188,7 +188,7 @@ internal sealed unsafe class RioForwarder
             Offset = (uint)ReceiveAddrOffset(slot),
             Length = Rio.SockAddrInetSize,
         };
-        if (_rio.ReceiveEx(_requestQueue, &data, 1, null, &remote, null, null, 0, (void*)(nuint)slot) == 0)
+        if (_rio.RIOReceiveEx(_requestQueue, &data, 1, null, &remote, null, null, 0, (void*)(nuint)slot) == 0)
         {
             throw new InvalidOperationException($"RIOReceiveEx failed: {Rio.WSAGetLastError()}");
         }
@@ -209,7 +209,7 @@ internal sealed unsafe class RioForwarder
             Length = Rio.SockAddrInetSize,
         };
         ulong context = (uint)slot | SendContextBit;
-        if (_rio.SendEx(_requestQueue, &data, 1, null, &remote, null, null, 0, (void*)(nuint)context) == 0)
+        if (_rio.RIOSendEx(_requestQueue, &data, 1, null, &remote, null, null, 0, (void*)(nuint)context) == 0)
         {
             // Count the send as finished so the slot is not leaked.
             if (--_pendingSends[slot] == 0)

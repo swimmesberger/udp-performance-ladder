@@ -7,6 +7,17 @@ namespace Forwarder.Rung3;
 /// RIO, so everything here is hand-written against mswsock.h. The function
 /// table is fetched at runtime via WSAIoctl; the structs must match the
 /// native layouts exactly.
+///
+/// Error handling: P/Invoked functions use SetLastError = true and callers
+/// read Marshal.GetLastWin32Error(), which the runtime captures before its
+/// marshalling stub can clobber the thread's last-error slot. The RIO
+/// function-pointer calls have no stub in between, so WSAGetLastError()
+/// immediately after them is correct there (and the only option).
+///
+/// Handles are deliberately raw IntPtrs rather than SafeHandles: they all
+/// live until process exit, SafeHandle cannot travel through the raw
+/// function pointers RIO hands us, and its per-call ref-counting is
+/// per-packet overhead this path exists to avoid.
 /// </summary>
 internal static unsafe partial class Rio
 {
@@ -85,7 +96,7 @@ internal static unsafe partial class Rio
             if (result != 0)
             {
                 throw new InvalidOperationException(
-                    $"WSAIoctl(SIO_GET_MULTIPLE_EXTENSION_FUNCTION_POINTER) failed: {WSAGetLastError()}");
+                    $"WSAIoctl(SIO_GET_MULTIPLE_EXTENSION_FUNCTION_POINTER) failed: {Marshal.GetLastWin32Error()}");
             }
         }
         return table;
@@ -141,19 +152,19 @@ internal unsafe struct RioFunctionTable
 {
     public uint Size;
 
-    public delegate* unmanaged[Stdcall]<IntPtr, RioBuf*, uint, uint, void*, int> Receive;
+    public delegate* unmanaged[Stdcall]<IntPtr, RioBuf*, uint, uint, void*, int> RIOReceive;
     public delegate* unmanaged[Stdcall]<
-        IntPtr, RioBuf*, uint, RioBuf*, RioBuf*, RioBuf*, RioBuf*, uint, void*, int> ReceiveEx;
-    public delegate* unmanaged[Stdcall]<IntPtr, RioBuf*, uint, uint, void*, int> Send;
+        IntPtr, RioBuf*, uint, RioBuf*, RioBuf*, RioBuf*, RioBuf*, uint, void*, int> RIOReceiveEx;
+    public delegate* unmanaged[Stdcall]<IntPtr, RioBuf*, uint, uint, void*, int> RIOSend;
     public delegate* unmanaged[Stdcall]<
-        IntPtr, RioBuf*, uint, RioBuf*, RioBuf*, RioBuf*, RioBuf*, uint, void*, int> SendEx;
-    public delegate* unmanaged[Stdcall]<IntPtr, void> CloseCompletionQueue;
-    public delegate* unmanaged[Stdcall]<uint, RioNotificationCompletion*, IntPtr> CreateCompletionQueue;
-    public delegate* unmanaged[Stdcall]<IntPtr, uint, uint, uint, uint, IntPtr, IntPtr, void*, IntPtr> CreateRequestQueue;
-    public delegate* unmanaged[Stdcall]<IntPtr, RioResult*, uint, uint> DequeueCompletion;
-    public delegate* unmanaged[Stdcall]<IntPtr, void> DeregisterBuffer;
-    public delegate* unmanaged[Stdcall]<IntPtr, int> Notify;
-    public delegate* unmanaged[Stdcall]<byte*, uint, IntPtr> RegisterBuffer;
-    public delegate* unmanaged[Stdcall]<IntPtr, uint, int> ResizeCompletionQueue;
-    public delegate* unmanaged[Stdcall]<IntPtr, uint, uint, int> ResizeRequestQueue;
+        IntPtr, RioBuf*, uint, RioBuf*, RioBuf*, RioBuf*, RioBuf*, uint, void*, int> RIOSendEx;
+    public delegate* unmanaged[Stdcall]<IntPtr, void> RIOCloseCompletionQueue;
+    public delegate* unmanaged[Stdcall]<uint, RioNotificationCompletion*, IntPtr> RIOCreateCompletionQueue;
+    public delegate* unmanaged[Stdcall]<IntPtr, uint, uint, uint, uint, IntPtr, IntPtr, void*, IntPtr> RIOCreateRequestQueue;
+    public delegate* unmanaged[Stdcall]<IntPtr, RioResult*, uint, uint> RIODequeueCompletion;
+    public delegate* unmanaged[Stdcall]<IntPtr, void> RIODeregisterBuffer;
+    public delegate* unmanaged[Stdcall]<IntPtr, int> RIONotify;
+    public delegate* unmanaged[Stdcall]<byte*, uint, IntPtr> RIORegisterBuffer;
+    public delegate* unmanaged[Stdcall]<IntPtr, uint, int> RIOResizeCompletionQueue;
+    public delegate* unmanaged[Stdcall]<IntPtr, uint, uint, int> RIOResizeRequestQueue;
 }
