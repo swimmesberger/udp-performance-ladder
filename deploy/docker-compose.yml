@@ -20,11 +20,11 @@ services:
     command:
       - serve
       - --port
-      - "${API_PORT:-5080}"
+      - "${API_PORT:-5390}"
     # The image has no curl/wget, so the healthcheck asks the API itself:
     # `udpbench health` exits non-zero when /healthz does not answer.
     healthcheck:
-      test: ["CMD", "dotnet", "UdpBench.dll", "health", "--port", "${API_PORT:-5080}"]
+      test: ["CMD", "dotnet", "UdpBench.dll", "health", "--port", "${API_PORT:-5390}"]
       interval: 30s
       timeout: 5s
       retries: 3

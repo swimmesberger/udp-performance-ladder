@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Net;
+using System.Net.Sockets;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 
@@ -15,7 +16,7 @@ public static class ServeCommand
 {
     public static int Run(string[] args)
     {
-        int port = 5080;
+        int port = 5390;
         for (int i = 0; i < args.Length; i++)
         {
             switch (args[i])
@@ -27,6 +28,18 @@ public static class ServeCommand
                     Console.Error.WriteLine($"unknown argument '{args[i]}'");
                     return 1;
             }
+        }
+
+        // Host networking means the API competes with everything else on the
+        // box, so a taken port is a routine setup mistake. Check before the
+        // host starts: letting Kestrel fail logs a stack trace that buries
+        // the one line the operator needs.
+        if (!IsPortFree(port))
+        {
+            Console.Error.WriteLine(
+                $"port {port} is already in use on this host. " +
+                "Pick a free one with --port (API_PORT in deploy/.env).");
+            return 1;
         }
 
         string? token = Environment.GetEnvironmentVariable("UDPBENCH_API_TOKEN");
@@ -105,6 +118,31 @@ public static class ServeCommand
         return 0;
     }
 
+    private static bool IsPortFree(int port)
+    {
+        try
+        {
+            // Must match how Kestrel binds "http://*:port": a dual-mode IPv6
+            // socket. Probing IPv4 0.0.0.0 instead reports a taken port as
+            // free, which is worse than not probing at all.
+            if (Socket.OSSupportsIPv6)
+            {
+                using var probe = new Socket(AddressFamily.InterNetworkV6, SocketType.Stream, ProtocolType.Tcp);
+                probe.DualMode = true;
+                probe.Bind(new IPEndPoint(IPAddress.IPv6Any, port));
+                return true;
+            }
+
+            using var v4Probe = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+            v4Probe.Bind(new IPEndPoint(IPAddress.Any, port));
+            return true;
+        }
+        catch (SocketException)
+        {
+            return false;
+        }
+    }
+
     /// <summary>
     /// Container healthcheck: the runtime image ships no curl or wget, so
     /// the binary probes its own /healthz endpoint. /healthz is exempt from
@@ -112,7 +150,7 @@ public static class ServeCommand
     /// </summary>
     public static int CheckHealth(string[] args)
     {
-        int port = 5080;
+        int port = 5390;
         for (int i = 0; i < args.Length; i++)
         {
             if (args[i] == "--port")

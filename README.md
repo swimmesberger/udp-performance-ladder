@@ -82,7 +82,7 @@ CI pushes the image to the private registry on every main build, so `docker comp
 A run starts the sink in-process, blasts the target, and reports both summaries:
 
 ```
-curl -X POST http://<generator>:5080/runs \
+curl -X POST http://<generator>:5390/runs \
   -H "Authorization: Bearer $UDPBENCH_API_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"target":"192.168.1.10:5000","size":32,"rate":250000,"sendDurationSeconds":30,"sinkPort":6000}'

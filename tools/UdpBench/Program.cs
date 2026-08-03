@@ -44,7 +44,7 @@ static int PrintUsage()
                       0 = until Ctrl+C (default 0)
 
         serve options:
-          --port      HTTP port for the control API (default 5080);
+          --port      HTTP port for the control API (default 5390);
                       set UDPBENCH_API_TOKEN to require a bearer token
         """);
     return 1;
