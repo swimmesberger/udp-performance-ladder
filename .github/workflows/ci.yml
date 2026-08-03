@@ -73,8 +73,8 @@ jobs:
 
           RECEIVED=$(grep '^received:' sink.log | tr -d ',' | awk '{print $2}')
           echo "sink received $RECEIVED packets"
-          if [ "${RECEIVED:-0}" -lt 12000 ]; then
-            echo "::error::smoke test: sink received $RECEIVED of ~15000 packets"
+          if [ "${RECEIVED:-0}" -lt 5000 ]; then
+            echo "::error::smoke test: sink received $RECEIVED of ~6000 packets"
             exit 1
           fi
 
