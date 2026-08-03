@@ -133,3 +133,26 @@ Open item before tx numbers are publishable: disable flow control on the
 DUT NIC (and Energy-Efficient Ethernet / Green Ethernet / Power Saving
 Mode, all currently enabled), or move the fan-out destination to a box
 that is not also the generator.
+
+## Arrival pattern is a benchmark variable: burst tolerance
+
+The batched generator emits per-wakeup bursts (up to 64 datagrams at line
+rate per thread) instead of the old smooth stream. Same offered averages,
+very different results for the small-buffer serial rungs:
+
+| Rung, 150k offered | Smooth generator | Bursty generator |
+| --- | --- | --- |
+| 1, naive (default ~64 KB rcvbuf) | 0.77% loss | 9.68% loss |
+| 2, frugal (1 MB rcvbuf)          | 0.00% loss | 2.46% loss |
+| 3, RIO (4096 posted receives)    | 0.82% loss | 0.00% loss |
+
+Under bursty arrivals rungs 1/2 wobble from 150k and break by 250k, while
+rung 3 stays clean to 400k+: deep posted-receive rings absorb bursts that
+overflow a socket buffer being drained 4 us at a time. CPU at 200k offered
+(bursty): rung 1 83.9%, rung 2 82.5%, rung 3 63.3%.
+
+Consequence: the final published matrix must fix one arrival profile
+(bursty, being both harder and closer to aggregated real traffic) and note
+it in the methodology. Pending the NIC hygiene pass (flow control, EEE,
+Green Ethernet, power saving all currently enabled on the DUT), after
+which the full three-rung matrix gets one definitive run.
