@@ -58,8 +58,14 @@ switch (engine)
     case "uring":
         IoUringEngine.Run(options, stats, cts.Token);
         break;
+    case "gso":
+        GsoEngine.Run(options, stats, cts.Token);
+        break;
+    case "afpacket":
+        AfPacketEngine.Run(options, stats, cts.Token);
+        break;
     default:
-        Console.Error.WriteLine($"unknown engine '{engine}' (mmsg | uring)");
+        Console.Error.WriteLine($"unknown engine '{engine}' (mmsg | uring | gso | afpacket)");
         return 1;
 }
 return 0;

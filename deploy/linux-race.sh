@@ -35,10 +35,11 @@ run_engine() {
     kill $FWD $SINK 2>/dev/null; wait $FWD $SINK 2>/dev/null
 
     RX=$((RX1 - RX0)); TX=$((TX1 - TX0))
+    SINKED=$(grep '^received:' /tmp/sink.log | grep -oE '[0-9,]+ packets' | tr -d ', packets')
     CPU=$(( (C1 - C0) * 100 / (TICKS * DUR) ))
     LOSS=$(awk -v s="$SENT" -v r="$RX" 'BEGIN { printf("%.2f", (s > 0) ? (100 * (s - r) / s) : 0) }')
-    printf '%9s offered  sent %9s  fwd_rx %9s (%5s%% rx loss)  fwd_tx %9s  cpu %3s%%\n' \
-      "$RATE" "$SENT" "$RX" "$LOSS" "$TX" "$CPU"
+    printf '%9s offered  sent %9s  fwd_rx %9s (%5s%% rx loss)  fwd_tx %9s  sink %9s  cpu %3s%%\n' \
+      "$RATE" "$SENT" "$RX" "$LOSS" "$TX" "${SINKED:-0}" "$CPU"
   done
 }
 
@@ -48,3 +49,5 @@ run_engine "plain loop (rung 2, async/epoll)" dotnet /app/rung2/Forwarder.Rung2.
 run_engine "plain loop (rung 2 --sync, emulated)" dotnet /app/rung2/Forwarder.Rung2.Frugal.dll --sync
 run_engine "mmsg batching"              dotnet /app/rung3/Forwarder.Rung3.LinuxBatched.dll --engine mmsg
 run_engine "io_uring"                   dotnet /app/rung3/Forwarder.Rung3.LinuxBatched.dll --engine uring
+run_engine "mmsg + UDP GSO"             dotnet /app/rung3/Forwarder.Rung3.LinuxBatched.dll --engine gso
+run_engine "AF_PACKET mmap rings"       dotnet /app/rung3/Forwarder.Rung3.LinuxBatched.dll --engine afpacket
