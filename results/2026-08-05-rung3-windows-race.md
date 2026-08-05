@@ -99,11 +99,22 @@ up everywhere (defer 1.86% -> 0.29% at 400k, uso 1.36% -> 0.33%).
    - the WSARecvMsg receive path instead of plain recv
    - loopback (no driver in the path at all)
    - a saturated receiver at 500k pps offered (backlogged socket queue)
-   Conclusion: on this build (26200), the net-offloads spec's "existing
-   software URO feature" does not mean a general software coalescer for
-   opted-in sockets; in practice URO delivers coalesced blobs only where
-   the layer below already batches (hardware URO / virtualized paths).
-   URO on commodity hardware = hardware feature waiting for hardware.
+   Late addendum (same day): the strongest-case probe also came back
+   empty. Wire traffic (not loopback, whose synchronous per-send
+   delivery may never present a coalescible batch, weakening the
+   original loopback argument), single flow, 1200 B payloads, a 3 s
+   deliberately backlogged 4 MB socket queue drained through raw
+   WSARecvMsg with UDP_COALESCED_INFO control space and msquic's exact
+   option value (65527): 295,511 receives, all exactly 1200 B, zero
+   coalesced cmsgs. Also checked: Get-NetUDPSetting and
+   Get-NetOffloadGlobalSetting expose no URO knob (RSC there is TCP);
+   no Tcpip\Parameters registry values match Uro/Coalesc.
+   Conclusion: Get-NetAdapterUro only rules out the HARDWARE half; the
+   software half is ruled out behaviorally, at its best case. On this
+   build (26200), the net-offloads spec's "existing software URO
+   feature" does not mean a general software coalescer for opted-in
+   sockets. URO on commodity hardware = hardware feature waiting for
+   hardware.
    Receive-side batching remains the open gap on Windows: recv syscalls
    are still per-packet in the uso engine (its 400k loss at 59% CPU is a
    receive-side cliff, not a CPU cliff).
