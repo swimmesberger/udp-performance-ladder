@@ -128,9 +128,38 @@ up everywhere (defer 1.86% -> 0.29% at 400k, uso 1.36% -> 0.33%).
    MS_NDISPROT (HTC), ms_l2bridge (the WSL mirrored-networking bridge),
    ms_l1vhlwf. Definitive attribution needs a TCPIP Full.Verbose trace
    (look for "URO SCU received. SegCount=..."), not user-space probing.
-   PUBLISHED CLAIM: URO is a real software feature that an ordinary
-   desktop stack can silently disable; the opt-in still succeeds and
-   nothing reports the failure. Not "waiting for hardware".
+   SOLVED (2026-08-05, TCPIP Full.Verbose trace, bench/uro-trace.ps1):
+
+     Framing: interface rundown: Interface = 5, Alias = Ethernet 9,
+       SW RSC/URO applicable = 1(TRUE), SW RSC enabled = 1(TRUE),
+       SW URO enabled = 1(TRUE).
+     TCP software RSC global disabled mask = 0,
+       UDP software URO global disabled mask = 48.
+
+   The interface was capable AND enabled the whole time. URO is killed
+   by a GLOBAL disable mask of 48. msquic's TSG decodes the values:
+   mask 2 = an incompatible WFP callout; mask 48 (0b110000) = an
+   incompatible IPSNPI client, namely winnat or FSE, which are enabled
+   automatically when WSL or Hyper-V are enabled on the machine.
+   Verified present here: winnat service Running, and the adapter
+   "vEthernet (FSE HostVnic)" (Hyper-V Virtual Ethernet Container
+   Adapter). Both exist because this box hosts the WSL2 VM that ran
+   every Linux measurement in this project.
+
+   => The Linux test rig disabled the Windows feature under test.
+
+   Eliminated along the way (both tested, both negative): npcap
+   unbound (nmap/npcap#737 mechanism), and the adapter stripped to
+   bare IPv4 (every other NDIS filter disabled + adapter reset).
+   Get-NetAdapterUro is the wrong instrument entirely: it reports
+   HARDWARE URO, which the RTL8125 lacks, and says nothing about the
+   software feature. TCP RSC was coalescing in the same trace
+   (RSC = 1(TRUE) CoalescedSegCount = 2), its mask being 0.
+
+   PUBLISHED CLAIM: software URO is real and was enabled on this
+   interface; a virtualization feature vetoed it system-wide with no
+   API surfacing the fact. To measure URO's actual value, use a
+   machine without WSL/Hyper-V (mask must read 0).
    Receive-side batching remains the open gap on Windows: recv syscalls
    are still per-packet in the uso engine (its 400k loss at 59% CPU is a
    receive-side cliff, not a CPU cliff).
