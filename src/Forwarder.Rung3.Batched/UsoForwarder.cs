@@ -43,6 +43,7 @@ internal sealed class UsoForwarder
         using var rx = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
         rx.Bind(new IPEndPoint(IPAddress.Any, _options.ListenPort));
         rx.ReceiveBufferSize = 1 << 20;
+        rx.DisableUdpConnReset();
         rx.Blocking = false;
         if (_uroSegment > 0)
         {

@@ -35,6 +35,8 @@ using var reporter = StatsReporter.Start(stats, options.StatsInterval);
 
 using var socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
 socket.ReceiveBufferSize = 1 << 20;
+socket.SendBufferSize = 1 << 20;
+socket.DisableUdpConnReset();
 socket.Bind(new IPEndPoint(IPAddress.Any, options.ListenPort));
 
 SocketAddress[] destinations = options.Destinations
@@ -72,8 +74,15 @@ if (synchronous)
         ReadOnlySpan<byte> datagram = span[..received];
         for (int i = 0; i < destinations.Length; i++)
         {
-            socket.SendTo(datagram, SocketFlags.None, destinations[i]);
-            stats.PacketForwarded(received);
+            try
+            {
+                socket.SendTo(datagram, SocketFlags.None, destinations[i]);
+                stats.PacketForwarded(received);
+            }
+            catch (SocketException e) when (e.SocketErrorCode == SocketError.NoBufferSpaceAvailable)
+            {
+                stats.PacketDropped(); // tx backpressure: drop, not crash
+            }
         }
     }
     return 0;
@@ -90,8 +99,15 @@ try
         ReadOnlyMemory<byte> datagram = receiveMemory[..received];
         for (int i = 0; i < destinations.Length; i++)
         {
-            await socket.SendToAsync(datagram, SocketFlags.None, destinations[i], cts.Token);
-            stats.PacketForwarded(received);
+            try
+            {
+                await socket.SendToAsync(datagram, SocketFlags.None, destinations[i], cts.Token);
+                stats.PacketForwarded(received);
+            }
+            catch (SocketException e) when (e.SocketErrorCode == SocketError.NoBufferSpaceAvailable)
+            {
+                stats.PacketDropped(); // tx backpressure: drop, not crash
+            }
         }
     }
 }

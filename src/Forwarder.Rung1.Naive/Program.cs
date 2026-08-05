@@ -33,6 +33,10 @@ using var client = new UdpClient(options.ListenPort);
 // 250k pps with the default vs the aligned buffer). Every rung uses 1 MB
 // so the ladder isolates one variable per rung; the default is the trap.
 client.Client.ReceiveBufferSize = 1 << 20;
+client.Client.SendBufferSize = 1 << 20;
+// Windows: without this, one inbound ICMP port-unreachable (a briefly
+// unbound destination) surfaces as ConnectionReset and kills the loop.
+client.Client.DisableUdpConnReset();
 Console.WriteLine(
     $"rung 1 (naive): listening on :{options.ListenPort}, " +
     $"forwarding to {options.Destinations.Count} destination(s)");
@@ -45,8 +49,17 @@ try
         stats.PacketReceived(datagram.Buffer.Length);
         foreach (IPEndPoint destination in options.Destinations)
         {
-            await client.SendAsync(datagram.Buffer, destination, cts.Token);
-            stats.PacketForwarded(datagram.Buffer.Length);
+            try
+            {
+                await client.SendAsync(datagram.Buffer, destination, cts.Token);
+                stats.PacketForwarded(datagram.Buffer.Length);
+            }
+            catch (SocketException e) when (e.SocketErrorCode == SocketError.NoBufferSpaceAvailable)
+            {
+                // Transmit backpressure (WSAENOBUFS): for UDP that is a
+                // drop, counted on our own counter, not a crash.
+                stats.PacketDropped();
+            }
         }
     }
 }

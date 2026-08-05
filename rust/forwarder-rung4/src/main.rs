@@ -90,6 +90,10 @@ fn main() {
     loop {
         let (received, _source) = match socket.recv_from(&mut buffer) {
             Ok(r) => r,
+            // Windows surfaces an inbound ICMP port-unreachable (a briefly
+            // unbound destination) as ConnectionReset on the next receive;
+            // for UDP that is noise, not a receive failure.
+            Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => continue,
             Err(e) => {
                 eprintln!("recv_from failed: {e}");
                 exit(1);
@@ -114,12 +118,14 @@ fn main() {
 
 /// Prints the same line shape as the C# rungs so the measurement scripts
 /// parse all rungs identically. Rust has no GC, so the alloc/gen0 fields
-/// the C# reporter prints are simply absent here.
+/// the C# reporter prints are simply absent here; the cpu field uses the
+/// same process-time accounting as .NET's Process.TotalProcessorTime.
 fn reporter(stats: Arc<Stats>, interval: Duration) {
     let mut previous_rx = 0u64;
     let mut previous_rx_bytes = 0u64;
     let mut previous_tx = 0u64;
     let mut previous_tx_bytes = 0u64;
+    let mut previous_cpu = process_cpu_time();
     let mut last = Instant::now();
     loop {
         thread::sleep(interval);
@@ -130,18 +136,21 @@ fn reporter(stats: Arc<Stats>, interval: Duration) {
         let rx_bytes = stats.rx_bytes.load(Ordering::Relaxed);
         let tx = stats.tx_packets.load(Ordering::Relaxed);
         let tx_bytes = stats.tx_bytes.load(Ordering::Relaxed);
+        let cpu = process_cpu_time();
 
         let rx_pps = (rx - previous_rx) as f64 / seconds;
         let rx_mbit = (rx_bytes - previous_rx_bytes) as f64 * 8.0 / seconds / 1_000_000.0;
         let tx_pps = (tx - previous_tx) as f64 / seconds;
         let tx_mbit = (tx_bytes - previous_tx_bytes) as f64 * 8.0 / seconds / 1_000_000.0;
+        let cpu_pct = (cpu - previous_cpu).as_secs_f64() / seconds * 100.0;
 
         println!(
-            "rx {:>11} pps {:>8.1} Mbit/s | tx {:>11} pps {:>8.1} Mbit/s | total rx {} tx {} drop 0",
+            "rx {:>11} pps {:>8.1} Mbit/s | tx {:>11} pps {:>8.1} Mbit/s | cpu {:>5.1}% | total rx {} tx {} drop 0",
             commas(rx_pps as u64),
             rx_mbit,
             commas(tx_pps as u64),
             tx_mbit,
+            cpu_pct,
             commas(rx),
             commas(tx),
         );
@@ -150,7 +159,53 @@ fn reporter(stats: Arc<Stats>, interval: Duration) {
         previous_rx_bytes = rx_bytes;
         previous_tx = tx;
         previous_tx_bytes = tx_bytes;
+        previous_cpu = cpu;
     }
+}
+
+/// Process CPU time (kernel + user), the same quantity .NET reports as
+/// Process.TotalProcessorTime; both sit on GetProcessTimes on Windows.
+#[cfg(windows)]
+fn process_cpu_time() -> Duration {
+    #[repr(C)]
+    #[derive(Default, Clone, Copy)]
+    struct FileTime {
+        low: u32,
+        high: u32,
+    }
+    extern "system" {
+        fn GetCurrentProcess() -> isize;
+        fn GetProcessTimes(
+            handle: isize,
+            creation: *mut FileTime,
+            exit: *mut FileTime,
+            kernel: *mut FileTime,
+            user: *mut FileTime,
+        ) -> i32;
+    }
+    unsafe {
+        let mut creation = FileTime::default();
+        let mut exited = FileTime::default();
+        let mut kernel = FileTime::default();
+        let mut user = FileTime::default();
+        if GetProcessTimes(
+            GetCurrentProcess(),
+            &mut creation,
+            &mut exited,
+            &mut kernel,
+            &mut user,
+        ) == 0
+        {
+            return Duration::ZERO;
+        }
+        let ticks = |t: FileTime| ((t.high as u64) << 32) | t.low as u64;
+        Duration::from_nanos((ticks(kernel) + ticks(user)) * 100)
+    }
+}
+
+#[cfg(not(windows))]
+fn process_cpu_time() -> Duration {
+    Duration::ZERO
 }
 
 fn commas(n: u64) -> String {

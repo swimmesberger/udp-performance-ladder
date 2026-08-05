@@ -10,6 +10,13 @@ namespace Forwarder.Rung3.Linux;
 /// after a single traversal of most of the stack. The pack is a copy per
 /// datagram, traded for sends dropping from one syscall per batch to one
 /// stack traversal per batch. QUIC stacks ship on exactly this.
+///
+/// With <c>gro</c> enabled the receive side opts into UDP_GRO, the receive
+/// twin: the kernel may deliver several same-flow, equal-size datagrams as
+/// one coalesced buffer, with the segment size in a UDP_GRO cmsg. A
+/// coalesced blob is already a packed GSO batch, so it is forwarded
+/// straight from the receive slot with zero copies. GRO is software in the
+/// kernel receive path; no NIC support required.
 /// </summary>
 internal static unsafe partial class GsoEngine
 {
@@ -17,6 +24,8 @@ internal static unsafe partial class GsoEngine
     private const int SlotSize = 2048;
     private const int SOL_UDP = 17;
     private const int UDP_SEGMENT = 103;
+    private const int UDP_GRO = 104;
+    private const int CmsgSpace = 24;         // CMSG_SPACE(4) on 64-bit
 
     [StructLayout(LayoutKind.Sequential)]
     private struct CmsgSegment
@@ -30,10 +39,18 @@ internal static unsafe partial class GsoEngine
     [LibraryImport("libc", EntryPoint = "sendmsg", SetLastError = true)]
     private static partial nint SendMsg(int fd, Msghdr* msg, int flags);
 
-    public static void Run(ForwarderOptions options, ForwarderStats stats, CancellationToken ct)
+    public static void Run(ForwarderOptions options, ForwarderStats stats, bool gro, CancellationToken ct)
     {
         int fd = Libc.CreateBoundUdpSocket(options.ListenPort, 1 << 20);
         int destinationCount = options.Destinations.Count;
+        if (gro)
+        {
+            int one = 1;
+            if (Libc.SetSockOpt(fd, SOL_UDP, UDP_GRO, &one, sizeof(int)) != 0)
+            {
+                throw new InvalidOperationException($"setsockopt(UDP_GRO) failed: errno {Marshal.GetLastWin32Error()}");
+            }
+        }
 
         byte* data = (byte*)NativeMemory.AllocZeroed(BatchSize * (nuint)SlotSize);
         byte* packed = (byte*)NativeMemory.AllocZeroed(BatchSize * (nuint)SlotSize);
@@ -43,6 +60,7 @@ internal static unsafe partial class GsoEngine
         var recvVec = (Mmsghdr*)NativeMemory.AllocZeroed((nuint)(BatchSize * sizeof(Mmsghdr)));
         var cmsg = (CmsgSegment*)NativeMemory.AllocZeroed(24); // CMSG_SPACE(2)
         var sendIov = (Iovec*)NativeMemory.AllocZeroed((nuint)sizeof(Iovec));
+        byte* recvCtrl = gro ? (byte*)NativeMemory.AllocZeroed(BatchSize * (nuint)CmsgSpace) : null;
 
         for (int d = 0; d < destinationCount; d++)
         {
@@ -56,17 +74,27 @@ internal static unsafe partial class GsoEngine
             recvVec[i].Header.NameLength = Libc.SockAddrInSize;
             recvVec[i].Header.Iov = &recvIov[i];
             recvVec[i].Header.IovLength = 1;
+            if (gro)
+            {
+                recvVec[i].Header.Control = recvCtrl + i * CmsgSpace;
+                recvVec[i].Header.ControlLength = CmsgSpace;
+            }
         }
         cmsg->Length = 18; // CMSG_LEN(sizeof(u16))
         cmsg->Level = SOL_UDP;
         cmsg->Type = UDP_SEGMENT;
         sendIov->Base = packed;
 
+        int* segSizes = stackalloc int[BatchSize];
         while (!ct.IsCancellationRequested)
         {
             for (int i = 0; i < BatchSize; i++)
             {
                 recvVec[i].Header.NameLength = Libc.SockAddrInSize;
+                if (gro)
+                {
+                    recvVec[i].Header.ControlLength = CmsgSpace;
+                }
             }
             int received = Libc.RecvMmsg(fd, recvVec, BatchSize, Libc.MSG_WAITFORONE, null);
             if (received < 0)
@@ -74,56 +102,99 @@ internal static unsafe partial class GsoEngine
                 if (Marshal.GetLastWin32Error() == 4) continue;
                 throw new InvalidOperationException($"recvmmsg failed: errno {Marshal.GetLastWin32Error()}");
             }
+
+            // Effective segment size per message: the message length, unless a
+            // UDP_GRO cmsg says the kernel coalesced several datagrams into it
+            // (cmsghdr on 64-bit: u64 len, s32 level, s32 type, data at +16).
             for (int i = 0; i < received; i++)
             {
-                stats.PacketReceived((int)recvVec[i].Length);
+                int length = (int)recvVec[i].Length;
+                int segment = length;
+                if (gro && recvVec[i].Header.ControlLength >= 20)
+                {
+                    byte* c = recvCtrl + i * CmsgSpace;
+                    if (*(nuint*)c >= 20 && *(int*)(c + 8) == SOL_UDP && *(int*)(c + 12) == UDP_GRO)
+                    {
+                        int fromCmsg = *(int*)(c + 16);
+                        if (fromCmsg > 0) segment = fromCmsg;
+                    }
+                }
+                segSizes[i] = segment;
+                int remaining = length;
+                while (remaining > 0)
+                {
+                    stats.PacketReceived(Math.Min(segment, remaining));
+                    remaining -= segment;
+                }
             }
 
-            // GSO wants equal-size segments (a smaller final one is allowed;
-            // we keep it simple and split runs of equal length).
             int start = 0;
             while (start < received)
             {
-                uint size = recvVec[start].Length;
+                int length = (int)recvVec[start].Length;
+                int segment = segSizes[start];
+
+                if (length > segment)
+                {
+                    // A coalesced blob is already a packed GSO batch: forward
+                    // it straight from the receive slot, zero copies.
+                    int blobSegments = (length + segment - 1) / segment;
+                    sendIov->Base = data + start * SlotSize;
+                    sendIov->Length = (nuint)length;
+                    cmsg->GsoSize = (ushort)segment;
+                    SendTo(fd, destinationCount, destAddrs, sendIov, cmsg, blobSegments, segment, stats);
+                    start++;
+                    continue;
+                }
+
+                // Single-datagram messages: pack runs of equal length, as before.
                 int end = start + 1;
-                while (end < received && recvVec[end].Length == size)
+                while (end < received && segSizes[end] == segment && (int)recvVec[end].Length == segment)
                 {
                     end++;
                 }
                 int count = end - start;
-
                 nuint total = 0;
                 for (int i = start; i < end; i++)
                 {
-                    Buffer.MemoryCopy(data + i * SlotSize, packed + total, SlotSize, size);
-                    total += size;
+                    Buffer.MemoryCopy(data + i * SlotSize, packed + total, SlotSize, (uint)segment);
+                    total += (nuint)segment;
                 }
+                sendIov->Base = packed;
                 sendIov->Length = total;
-                cmsg->GsoSize = (ushort)size;
-
-                for (int d = 0; d < destinationCount; d++)
-                {
-                    var header = new Msghdr
-                    {
-                        Name = destAddrs + d * Libc.SockAddrInSize,
-                        NameLength = Libc.SockAddrInSize,
-                        Iov = sendIov,
-                        IovLength = 1,
-                        Control = count > 1 ? cmsg : null, // single datagram: plain send
-                        ControlLength = count > 1 ? (nuint)24 : 0,
-                    };
-                    nint sent = SendMsg(fd, &header, 0);
-                    if (sent < 0)
-                    {
-                        if (Marshal.GetLastWin32Error() == 4) continue;
-                        throw new InvalidOperationException($"sendmsg(GSO) failed: errno {Marshal.GetLastWin32Error()}");
-                    }
-                    for (int i = 0; i < count; i++)
-                    {
-                        stats.PacketForwarded((int)size);
-                    }
-                }
+                cmsg->GsoSize = (ushort)segment;
+                SendTo(fd, destinationCount, destAddrs, sendIov, cmsg, count, segment, stats);
                 start = end;
+            }
+        }
+    }
+
+    private static void SendTo(
+        int fd, int destinationCount, byte* destAddrs, Iovec* sendIov, CmsgSegment* cmsg,
+        int count, int segment, ForwarderStats stats)
+    {
+        for (int d = 0; d < destinationCount; d++)
+        {
+            var header = new Msghdr
+            {
+                Name = destAddrs + d * Libc.SockAddrInSize,
+                NameLength = Libc.SockAddrInSize,
+                Iov = sendIov,
+                IovLength = 1,
+                Control = count > 1 ? cmsg : null, // single datagram: plain send
+                ControlLength = count > 1 ? (nuint)24 : 0,
+            };
+            nint sent = SendMsg(fd, &header, 0);
+            if (sent < 0)
+            {
+                if (Marshal.GetLastWin32Error() == 4) continue;
+                throw new InvalidOperationException($"sendmsg(GSO) failed: errno {Marshal.GetLastWin32Error()}");
+            }
+            nint remaining = (nint)sendIov->Length;
+            while (remaining > 0)
+            {
+                stats.PacketForwarded((int)Math.Min(segment, remaining));
+                remaining -= segment;
             }
         }
     }

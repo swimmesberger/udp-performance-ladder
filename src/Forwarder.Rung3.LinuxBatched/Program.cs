@@ -59,13 +59,22 @@ switch (engine)
         IoUringEngine.Run(options, stats, cts.Token);
         break;
     case "gso":
-        GsoEngine.Run(options, stats, cts.Token);
+        GsoEngine.Run(options, stats, gro: false, cts.Token);
+        break;
+    case "gso-gro":
+        GsoEngine.Run(options, stats, gro: true, cts.Token);
+        break;
+    case "uring-gso":
+        UringGsoEngine.Run(options, stats, gro: false, cts.Token);
+        break;
+    case "uring-gso-gro":
+        UringGsoEngine.Run(options, stats, gro: true, cts.Token);
         break;
     case "afpacket":
         AfPacketEngine.Run(options, stats, cts.Token);
         break;
     default:
-        Console.Error.WriteLine($"unknown engine '{engine}' (mmsg | uring | gso | afpacket)");
+        Console.Error.WriteLine($"unknown engine '{engine}' (mmsg | uring | gso | gso-gro | uring-gso | uring-gso-gro | afpacket)");
         return 1;
 }
 return 0;
