@@ -28,6 +28,12 @@ internal static unsafe partial class Rio
     public const int EventCompletionType = 1;
     public const int SockAddrInetSize = 28;
 
+    // mswsockdef.h request flags. DEFER inserts into the request queue in
+    // user mode without kicking the kernel; COMMIT_ONLY (all other args
+    // NULL/zero) kicks every deferred request on the queue at once.
+    public const uint MsgDefer = 0x2;
+    public const uint MsgCommitOnly = 0x8;
+
     public static readonly IntPtr InvalidSocket = (IntPtr)(-1);
     public static readonly IntPtr InvalidBufferId = unchecked((IntPtr)(nint)uint.MaxValue);
 

@@ -23,6 +23,20 @@ Winner: **Rust on RIO** (58%), then C# RIO (63%). The interface dominates;
 the language is a ~5% additive delta on top (Rust+RIO = C#RIO - 5%,
 predicted 60%, measured 58%).
 
+## Rung 3 Windows race (2026-08-05; same-day A/B, busier machine, median
+## stat — columns compare to each other, NOT to the table above)
+
+| Engine | CPU @ 200k | Notes |
+| --- | --- | --- |
+| rio (per-request kicks) | 66% | same engine as the published 63% row |
+| rio-defer (DEFER + COMMIT_ONLY per batch) | 52% | clean to 300k, intake ~390k |
+| uso (UDP_SEND_MSG_SIZE packed sends) | **31%** | plain sockets; 1.4% loss at 400k at 59% CPU |
+| uso + uro | 72% | URO never coalesced (no driver support) -> per-packet sends |
+
+Windows mirrors Linux family-for-family: stack batching (USO/GSO) >
+transition batching (defer/mmsg) > per-request ring calls. See
+2026-08-05-rung3-windows-race.md.
+
 ## Linux over the real LAN (virtualized WSL adapter — comparable only to each other)
 
 CPU self-reported, sustained 200k pps, zero loss:
@@ -44,8 +58,11 @@ cliff past 200k (single-threaded, all header work in-process).
 Ranked by CPU effect, largest first:
 
 1. **The kernel interface** (kernel + its native I/O API — inseparable, RIO
-   is Windows-only, io_uring/GSO/XDP Linux-only): ~25-30% on Windows,
-   larger on Linux (GSO/AF_PACKET are 1.4-2.7x cheaper than plain mmsg).
+   is Windows-only, io_uring/GSO/XDP Linux-only): ~25-30% on Windows for
+   rings, ~2x for USO vs per-request RIO (2026-08-05 race); on Linux
+   GSO/AF_PACKET are 1.4-2.7x cheaper than plain mmsg. Within the
+   interface axis the family order is the same on both OSes:
+   stack batching (GSO/USO) > transition batching (mmsg/defer) > rings.
 2. **Dispatch model** (async vs blocking): ~10-15% on Windows; up to 3x on
    Linux (.NET async epoll = 131% vs sync 43%).
 3. **Language** (Rust vs C#): ~5%, additive.

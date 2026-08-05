@@ -25,6 +25,14 @@ internal sealed unsafe class RioForwarder
     private readonly ForwarderOptions _options;
     private readonly ForwarderStats _stats;
 
+    // Deferred mode: requests are inserted with RIO_MSG_DEFER (a pure
+    // user-mode ring write) and the kernel is kicked once per dequeue batch
+    // with RIO_MSG_COMMIT_ONLY, instead of once per posted request. This is
+    // the submission-side twin of the batched completion harvest.
+    private readonly bool _defer;
+    private bool _receivesDeferred;
+    private bool _sendsDeferred;
+
     private RioFunctionTable _rio;
     private IntPtr _socket;
     private IntPtr _completionQueue;
@@ -50,10 +58,11 @@ internal sealed unsafe class RioForwarder
     private static int DestinationAddrOffset(int index) =>
         PoolSlots * SlotSize + PoolSlots * AddrStride + index * AddrStride;
 
-    public RioForwarder(ForwarderOptions options, ForwarderStats stats)
+    public RioForwarder(ForwarderOptions options, ForwarderStats stats, bool defer)
     {
         _options = options;
         _stats = stats;
+        _defer = defer;
     }
 
     public void Run(CancellationToken ct)
@@ -132,6 +141,10 @@ internal sealed unsafe class RioForwarder
         {
             PostReceive(slot);
         }
+        if (_receivesDeferred)
+        {
+            CommitReceives();
+        }
         for (int slot = PostedReceives; slot < PoolSlots; slot++)
         {
             _freeSlots[_freeSlotCount++] = slot;
@@ -208,7 +221,36 @@ internal sealed unsafe class RioForwarder
                     }
                 }
             }
+
+            // Deferred mode: one kernel kick per side per dequeue batch,
+            // instead of one per posted request.
+            if (_receivesDeferred)
+            {
+                CommitReceives();
+            }
+            if (_sendsDeferred)
+            {
+                CommitSends();
+            }
         }
+    }
+
+    private void CommitReceives()
+    {
+        if (_rio.RIOReceiveEx(_requestQueue, null, 0, null, null, null, null, Rio.MsgCommitOnly, null) == 0)
+        {
+            throw new InvalidOperationException($"RIOReceiveEx(COMMIT_ONLY) failed: {Rio.WSAGetLastError()}");
+        }
+        _receivesDeferred = false;
+    }
+
+    private void CommitSends()
+    {
+        if (_rio.RIOSendEx(_requestQueue, null, 0, null, null, null, null, Rio.MsgCommitOnly, null) == 0)
+        {
+            throw new InvalidOperationException($"RIOSendEx(COMMIT_ONLY) failed: {Rio.WSAGetLastError()}");
+        }
+        _sendsDeferred = false;
     }
 
     private void PostReceive(int slot)
@@ -225,7 +267,13 @@ internal sealed unsafe class RioForwarder
             Offset = (uint)AddrOffset(slot),
             Length = Rio.SockAddrInetSize,
         };
-        if (_rio.RIOReceiveEx(_requestQueue, &data, 1, null, &remote, null, null, 0, (void*)(nuint)slot) == 0)
+        uint flags = 0;
+        if (_defer)
+        {
+            flags = Rio.MsgDefer;
+            _receivesDeferred = true;
+        }
+        if (_rio.RIOReceiveEx(_requestQueue, &data, 1, null, &remote, null, null, flags, (void*)(nuint)slot) == 0)
         {
             throw new InvalidOperationException($"RIOReceiveEx failed: {Rio.WSAGetLastError()}");
         }
@@ -246,7 +294,13 @@ internal sealed unsafe class RioForwarder
             Length = Rio.SockAddrInetSize,
         };
         ulong context = (uint)slot | SendContextBit;
-        if (_rio.RIOSendEx(_requestQueue, &data, 1, null, &remote, null, null, 0, (void*)(nuint)context) == 0)
+        uint flags = 0;
+        if (_defer)
+        {
+            flags = Rio.MsgDefer;
+            _sendsDeferred = true;
+        }
+        if (_rio.RIOSendEx(_requestQueue, &data, 1, null, &remote, null, null, flags, (void*)(nuint)context) == 0)
         {
             // Count the send as finished so the slot is not leaked.
             if (--_pendingSends[slot] == 0)

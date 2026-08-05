@@ -54,8 +54,23 @@ for RATE in "$@"; do
 
   sleep $((DURATION + 8))
   RESULT=$(curl -s "$API/runs/$ID")
-  # Read the forwarder's own CPU (median-ish: last loaded interval line).
-  CPU=$(grep -oE 'cpu +[0-9.]+%' "$R/fwd.log" | tail -3 | grep -oE '[0-9.]+' | sort -n | tail -1)
+  # Read the forwarder's own CPU: the median of loaded stats-line samples,
+  # after dropping two ramp seconds and the partial last second. (A tail
+  # read lands in the idle seconds after the sender stops; the max catches
+  # the ramp spike; the loaded median is the steady state.)
+  CPU=$(awk '{
+    rx=0; cpu=-1; seen=0;
+    for (i=1; i<=NF; i++) {
+      if ($i=="rx" && !seen) { v=$(i+1); gsub(",","",v); rx=v+0; seen=1 }
+      if ($i=="cpu") { c=$(i+1); sub("%","",c); cpu=c+0 }
+    }
+    if (rx>1000 && cpu>=0) { n++; a[n]=cpu }
+  } END {
+    if (n==0) { printf "0.0"; exit }
+    lo=3; hi=n-1; if (hi<lo) { lo=1; hi=n }
+    for (i=lo+1; i<=hi; i++) { k=a[i]; j=i-1; while (j>=lo && a[j]>k) { a[j+1]=a[j]; j-- } a[j+1]=k }
+    printf "%.1f", a[lo+int((hi-lo)/2)]
+  }' "$R/fwd.log")
   kill "$FWD" 2>/dev/null
   sleep 1
 
