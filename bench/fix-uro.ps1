@@ -114,11 +114,16 @@ function Show-State {
 function Test-Uro {
     <#  Runs the probe against real wire traffic and returns $true if the
         stack coalesced. Loopback cannot answer this, so the generator has
-        to send: probe binds :5000, generator is told to blast it.  #>
+        to send: probe binds :5000, generator is told to blast it.
+
+        Progress goes to Write-Host ON PURPOSE. A PowerShell function
+        returns everything it writes to the output stream, so a stray
+        Write-Output here turns the result into an array, and a non-empty
+        array is always truthy: that bug once reported every component
+        "harmless" including a baseline that had never been checked.  #>
     $probe = Join-Path (Split-Path $PSScriptRoot -Parent) 'tools\UroProbe'
     $job = Start-Job -ScriptBlock {
         param($p) & dotnet run -c Release --project $p -- wire 1200 3 2>&1
-        $LASTEXITCODE
     } -ArgumentList $probe
     Start-Sleep -Seconds 4
     $body = @{ target = "$LocalIp`:5000"; size = 1200; rate = 60000
@@ -126,11 +131,19 @@ function Test-Uro {
     try { Invoke-RestMethod -Method Post -Uri "$GeneratorApi/runs" -ContentType 'application/json' -Body $body | Out-Null }
     catch { Write-Warning "generator: $($_.Exception.Message)" }
     Wait-Job $job -Timeout 60 | Out-Null
-    $out = Receive-Job $job
+    $out = @(Receive-Job $job)
     Remove-Job $job -Force
-    $verdict = ($out | Select-String 'VERDICT').ToString()
-    Write-Output "      $verdict"
-    return ($verdict -match 'IS COALESCING')
+
+    $verdictLine  = $out | Where-Object { "$_" -match 'VERDICT' } | Select-Object -First 1
+    $receiveLine  = $out | Where-Object { "$_" -match '^receives=' } | Select-Object -First 1
+    if (-not $verdictLine) {
+        Write-Host '      probe produced no verdict; raw output:'
+        $out | Select-Object -First 6 | ForEach-Object { Write-Host "        $_" }
+        return $false
+    }
+    Write-Host "      $receiveLine"
+    Write-Host "      $verdictLine"
+    return [bool]("$verdictLine" -match 'IS COALESCING')
 }
 
 if ($Bisect) {
