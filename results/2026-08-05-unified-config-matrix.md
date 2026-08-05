@@ -77,12 +77,19 @@ Two findings:
    more, so the two are near-redundant: the receive twin does the
    batching job by itself, and does it slightly better, because a
    coalesced blob amortizes stack traversal as well as syscalls.
-2. **USO + URO == USO on this hardware** (27.7 vs 29.2 @200k, 43.2 vs
-   42.1 @300k: within run noise, sign flips by rate). Expected, since
-   URO never coalesces here; what it proves is that the opt-in itself
-   is free, so the earlier 60.6% "uso+uro" figure was an artifact of
-   the old engine forwarding each receive as its own batch. That row is
-   superseded; the URO opt-in is inert, not harmful.
+2. **USO + URO == USO on this hardware**, confirmed by an interleaved
+   A/B at 200k (3 rounds each, alternating; bench/ab-uro.sh): uso
+   20.3/21.7/21.6 vs uso+uro 17.0/20.3/21.8, per-round deltas -3.3/
+   -1.4/+0.2 against within-arm spreads up to 4.8. No resolvable
+   difference in either direction. (The single-pair 29.2-vs-27.7
+   reading earlier says the same, and note the absolute drift: the
+   same engine read ~28-29% in the morning and ~20-22% in the
+   afternoon, ~7 points of session-load drift, which is why interleaving
+   is the only honest protocol for close pairs and why within-set
+   comparisons, not absolutes, are the published claim.) Expected,
+   since URO never coalesces here; the earlier 60.6% "uso+uro" figure
+   was an artifact of the old engine forwarding each receive as its own
+   batch. Superseded; the URO opt-in is inert, not harmful.
 
 Consequence for the article's asymmetry claim: it is not just that
 Windows' URO is dark. Windows has NO receive-side batching available at
