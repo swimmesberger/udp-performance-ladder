@@ -16,6 +16,23 @@
          and 48 = incompatible IPSNPI clients, namely winnat or FSE, which
          are enabled automatically when WSL or Hyper-V are enabled.
 
+    WHAT MUST ACTUALLY BE OFF (measured on this project's rig, 2026-08-05):
+
+      * Hyper-V, the Virtual Machine Platform and WSL: MANDATORY, and a
+        REBOOT with them. This is the mask-48 cause. Stopping winnat and
+        disabling the Hyper-V vnics at runtime is NOT enough: the IPSNPI
+        clients register with tcpip at boot and the mask stays 48. Uninstall
+        the features (Disable-WindowsOptionalFeature -Online -FeatureName
+        Microsoft-Hyper-V-All, VirtualMachinePlatform,
+        Microsoft-Windows-Subsystem-Linux) and restart. Verified: mask went
+        48 -> 0 and coalescing began immediately, on a NIC whose
+        Get-NetAdapterUro reports nothing.
+      * NDIS filters: run -Bisect to find out which ones matter on YOUR
+        machine rather than trusting this script's suspect list.
+
+    Get-NetAdapterUro answers a DIFFERENT question (hardware offload) and is
+    useless here: this rig coalesces happily while it reports nothing.
+
     -Diagnose reports everything cheap. -Apply records the current state and
     then removes both classes of blocker it can remove without a reboot.
     -Restore puts every recorded setting back exactly.
@@ -32,7 +49,12 @@ param(
     [Parameter(ParameterSetName = 'Diagnose')][switch]$Diagnose,
     [Parameter(ParameterSetName = 'Apply')][switch]$Apply,
     [Parameter(ParameterSetName = 'Restore')][switch]$Restore,
+    # Enable each suspect filter in turn, run the probe, and report which
+    # ones actually stop coalescing. Needs the generator (see -GeneratorApi).
+    [Parameter(ParameterSetName = 'Bisect')][switch]$Bisect,
     [string]$Adapter = 'Ethernet 9',
+    [string]$GeneratorApi = 'http://simondatastore:5390',
+    [string]$LocalIp = '192.168.178.143',
     [switch]$SkipFilters,
     [switch]$SkipIpsnpi
 )
@@ -43,6 +65,10 @@ $legacyFile = Join-Path $PSScriptRoot 'uro-strip-state.json'
 
 # Bindings never touched: the probe needs IPv4.
 $keepAlways = @('ms_tcpip')
+
+# NOTE: every Get-Content feeding ConvertFrom-Json here uses -Raw. Windows
+# PowerShell 5.1 pipes a file line by line, which silently fails to parse a
+# multi-line JSON array and cost this script one botched restore.
 
 # NDIS filters/protocols known or suspected to suppress coalescing. Each is
 # restored verbatim afterwards; the comment is why it is on the list.
@@ -85,17 +111,72 @@ function Show-State {
     Write-Output "    'UDP software URO global disabled mask'  (0 = healthy)"
 }
 
+function Test-Uro {
+    <#  Runs the probe against real wire traffic and returns $true if the
+        stack coalesced. Loopback cannot answer this, so the generator has
+        to send: probe binds :5000, generator is told to blast it.  #>
+    $probe = Join-Path (Split-Path $PSScriptRoot -Parent) 'tools\UroProbe'
+    $job = Start-Job -ScriptBlock {
+        param($p) & dotnet run -c Release --project $p -- wire 1200 3 2>&1
+        $LASTEXITCODE
+    } -ArgumentList $probe
+    Start-Sleep -Seconds 4
+    $body = @{ target = "$LocalIp`:5000"; size = 1200; rate = 60000
+               sendDurationSeconds = 6; threads = 1; sinkPort = 6000; sinkThreads = 1 } | ConvertTo-Json
+    try { Invoke-RestMethod -Method Post -Uri "$GeneratorApi/runs" -ContentType 'application/json' -Body $body | Out-Null }
+    catch { Write-Warning "generator: $($_.Exception.Message)" }
+    Wait-Job $job -Timeout 60 | Out-Null
+    $out = Receive-Job $job
+    Remove-Job $job -Force
+    $verdict = ($out | Select-String 'VERDICT').ToString()
+    Write-Output "      $verdict"
+    return ($verdict -match 'IS COALESCING')
+}
+
+if ($Bisect) {
+    if (-not (Test-Elevated)) { throw 'run elevated' }
+    Write-Output '=== URO component bisection ==='
+    Write-Output 'Baseline: every suspect filter disabled.'
+    foreach ($id in $suspectFilters.Keys) {
+        Disable-NetAdapterBinding -Name $Adapter -ComponentID $id -ErrorAction SilentlyContinue
+    }
+    Start-Sleep -Seconds 3
+    if (-not (Test-Uro)) {
+        Write-Warning 'No coalescing even at baseline: the global mask is not 0.'
+        Write-Warning 'Uninstall Hyper-V/VirtualMachinePlatform/WSL and reboot first.'
+        return
+    }
+    Write-Output 'baseline OK, URO coalesces. Testing one component at a time:'
+    $verdicts = [ordered]@{}
+    foreach ($id in $suspectFilters.Keys) {
+        $b = Get-NetAdapterBinding -Name $Adapter -ComponentID $id -ErrorAction SilentlyContinue
+        if (-not $b) { $verdicts[$id] = 'not installed'; continue }
+        Write-Output "  enabling $id ($($suspectFilters[$id]))"
+        Enable-NetAdapterBinding -Name $Adapter -ComponentID $id -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 3
+        $verdicts[$id] = if (Test-Uro) { 'harmless' } else { 'MUST BE DISABLED' }
+        Disable-NetAdapterBinding -Name $Adapter -ComponentID $id -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 2
+    }
+    Write-Output ''
+    Write-Output '=== verdict ==='
+    $verdicts.GetEnumerator() | ForEach-Object { '{0,-16} {1}' -f $_.Key, $_.Value }
+    Write-Output ''
+    Write-Output 'Re-enable what you need with -Restore (state file permitting).'
+    return
+}
+
 if ($Restore) {
     if (-not (Test-Elevated)) { throw 'run elevated' }
     if (Test-Path $stateFile) {
-        $s = Get-Content $stateFile | ConvertFrom-Json
+        $s = Get-Content $stateFile -Raw | ConvertFrom-Json
     } elseif (Test-Path $legacyFile) {
         # An earlier ad-hoc strip left only a bindings list behind; restore
         # from that so a half-stripped adapter is never stranded.
         Write-Output "no $stateFile; restoring from legacy strip state"
         $s = [pscustomobject]@{
             Adapter          = $Adapter
-            Bindings         = @(Get-Content $legacyFile | ConvertFrom-Json)
+            Bindings         = @(Get-Content $legacyFile -Raw | ConvertFrom-Json)
             DisabledAdapters = @()
             WinNatWasRunning = $true
         }
@@ -135,7 +216,7 @@ if ($Apply) {
     $current = @((Get-NetAdapterBinding -Name $Adapter | Where-Object Enabled).ComponentID)
     $original = $current
     if (Test-Path $legacyFile) {
-        $legacy = @(Get-Content $legacyFile | ConvertFrom-Json)
+        $legacy = @(Get-Content $legacyFile -Raw | ConvertFrom-Json)
         if ($legacy.Count -gt $current.Count) {
             $original = $legacy
             Write-Output "absorbed earlier strip state ($($legacy.Count) bindings)"

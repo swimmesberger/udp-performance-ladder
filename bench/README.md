@@ -33,18 +33,39 @@ Each runs a set back to back so the columns compare to each other.
 
 ## The URO workflow
 
-Software URO can be off for reasons no API reports. Order of operations:
+Software URO can be off for reasons no API reports, and the thing most
+people check first is the wrong question. Order of operations:
 
 1. `fix-uro.ps1 -Diagnose` — bindings, IPSNPI clients, offload switch.
-   (`Get-NetAdapterUro` answers a *different* question: hardware URO.)
 2. `uro-trace.ps1` (elevated) — read the two lines that matter:
    `SW RSC/URO applicable` / `SW URO enabled` on the interface, and
    `UDP software URO global disabled mask = N`.
 3. Decode the mask: **0** healthy, **2** an incompatible WFP callout,
    **48** incompatible IPSNPI clients (winnat or FSE, switched on
    automatically by WSL and Hyper-V).
-4. `fix-uro.ps1 -Apply` (elevated) removes what can go without a reboot,
-   `-Restore` puts it all back. State lives in `uro-state.json`.
+4. `fix-uro.ps1 -Bisect` (elevated) — with the mask at 0, enable each
+   suspect NDIS filter in turn and let the probe say which ones actually
+   stop coalescing on your machine.
+5. `fix-uro.ps1 -Restore` (elevated) — put everything back.
 
-Clearing a mask of 48 for good means disabling the Hyper-V/WSL features
-and rebooting, or measuring on a machine that never had them.
+### What must be off (measured here, 2026-08-05)
+
+* **Hyper-V, Virtual Machine Platform and WSL, plus a reboot.** This is
+  the mask-48 cause and it is mandatory. Stopping `winnat` and disabling
+  the Hyper-V vnics at runtime does *not* work: the IPSNPI clients
+  register with tcpip at boot and the mask stays 48 (tested). After
+  uninstalling the features and restarting, the mask read 0 and the same
+  traffic went from 300,000 single-datagram receives to 46,905 receives
+  carrying up to 8 datagrams each.
+* **NDIS filters**: machine-specific, so bisect rather than guess.
+  Npcap is the documented offender ([nmap/npcap#737](https://github.com/nmap/npcap/issues/737)).
+
+### Two traps
+
+* `Get-NetAdapterUro` answers a **different** question (hardware
+  offload). This rig coalesces happily while that cmdlet reports
+  nothing, so an empty result proves nothing about software URO.
+* **Loopback can never test URO.** Delivery there is synchronous per
+  send, so no batch exists to merge: measured zero coalescing on
+  loopback even with the mask at 0. Always probe over a real link
+  (`UroProbe wire ...`, which is what `-Bisect` drives).
