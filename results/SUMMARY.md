@@ -11,7 +11,7 @@ on every rung, CPU = one core at a sustained 200,000 pps.
 
 | Rung / variant | Clean to | Breaks by | CPU @ 200k | Alloc |
 | --- | --- | --- | --- | --- |
-| 1 naive UdpClient (async) | 250k | 300k | 88% | 360 B/dgram |
+| 1 naive UdpClient (async) | 250k | 300k | 88% | ~245 B/dgram |
 | 2 frugal Socket (async) | 250k | 300k | 88% | 0 |
 | 2 frugal Socket (--sync) | 250k | 300k | 80% | 0 |
 | 4 Rust std sockets (blocking) | 250k | ~285k | 76% | 0 (no GC) |
@@ -68,6 +68,9 @@ wrong thing, caught by counting at both ends:
 - RIO's first design dropped packets invisibly (no OS counter);
 - AF_PACKET counted queued frames as delivered (sink got nothing);
 - multi-thread sink over-reported loss from ragged sequence tails;
-- virtualized XDP would measure a fallback path.
+- virtualized XDP would measure a fallback path;
+- the micro-benchmark measured the Task-returning UdpClient overloads
+  while the forwarder runs the ValueTask ct-overloads (360 vs 200 B/dgram;
+  see 2026-08-05 note), caught by dividing the wire counter by pps.
 Assert delivery at the sink; assert you got the mode/interface you asked
 for; state the arrival profile; do not trust loopback for wire claims.
