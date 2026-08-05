@@ -1,5 +1,18 @@
 # UDP performance ladder: consolidated results
 
+**Canonical set: `2026-08-05-unified-config-matrix.md`** — every engine on
+both OSes re-measured under ONE configuration (Defender off, driver
+10.80.20.407, median-of-loaded-samples CPU); that file is what the
+article's tables now quote. Winners: USO 28% @200k on Windows,
+mmsg+GSO+GRO 24% on Linux, AF_PACKET 12.5% (raw frames). io_uring loses
+on the real link (70%), and io_uring+GRO cmsgs trips the io-wq worker
+pool (122%+). URO: hardware-only, conclusively (msquic-shaped probe).
+
+Everything below this line is the 2026-08-03 era set, kept for history;
+its absolute numbers used a different config and CPU statistic.
+
+---
+
 Rollup of every measured rung as of 2026-08-03. Detail and methodology in
 the dated files in this directory; environment and repro in
 `../bench/ENVIRONMENT.md`.
