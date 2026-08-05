@@ -61,11 +61,24 @@ in `deploy/.env` if that matters.
 ## NIC hygiene applied to the workstation (for clean numbers)
 
 Set via `Set-NetAdapterAdvancedProperty -Name 'Ethernet 9' -RegistryKeyword
-<kw> -RegistryValue <v>`. All must be off/set or numbers are polluted:
+<kw> -RegistryValue <v>` (needs an ELEVATED shell; non-admin gets Access
+is denied). All must be off/set or numbers are polluted:
 - `*FlowControl` = 0 (else 802.3x PAUSE lets the NAS silently throttle tx)
 - `*EEE` = 0, `EnableGreenEthernet` = 0, `PowerSavingMode` = 0, `GigaLite` = 0
 - `*ReceiveBuffers` = 4096 (driver max; absorbs the 64-packet bursts)
 - `*InterruptModeration` left ON (throughput-realistic default)
+
+**A driver update silently resets part of this list.** The 2026-08-05
+update (Realtek 1125.26.50.2025 -> 10.80.20.407) reset `*ReceiveBuffers`
+to 1024 and re-enabled `EnableGreenEthernet` and `GigaLite` while
+preserving the rest. Re-run the audit after ANY driver change:
+`Get-NetAdapterAdvancedProperty -Name 'Ethernet 9' | ? { $_.RegistryKeyword
+-in '*ReceiveBuffers','EnableGreenEthernet','GigaLite','*FlowControl','*EEE' }`.
+The 10.80 driver line also shifts engine numbers in opposite directions
+(per-packet RIO ~10 points worse, USO ~9 points better at 200k), so
+matrices from different driver versions are not comparable; the results
+docs record the driver version per run set. URO remains unadvertised on
+10.80.20.407 (`Get-NetAdapterUro` empty).
 
 Windows Firewall: the forwarder .exe rules exist for Public AND Private
 profiles (Ethernet 9 is a Private network). A new/unsigned forwarder binary

@@ -26,13 +26,13 @@ predicted 60%, measured 58%).
 ## Rung 3 Windows race (2026-08-05; same-day A/B, busier machine, median
 ## stat — columns compare to each other, NOT to the table above)
 
-Defender real-time protection + firewall OFF (the published set):
+Defender + firewall OFF, driver 10.80.20.407 (the published set):
 
 | Engine | CPU @ 200k | Notes |
 | --- | --- | --- |
-| rio (per-request kicks) | 54% | same engine as the published 63% row |
-| rio-defer (DEFER + COMMIT_ONLY per batch) | 47% | clean to 300k, ~400k intake at 0.3% loss |
-| uso (UDP_SEND_MSG_SIZE packed sends) | **37%** | plain sockets; 0.3% loss at 400k at 76% CPU |
+| rio (per-request kicks) | 56% | same engine as the published 63% row |
+| rio-defer (DEFER + COMMIT_ONLY per batch) | 50% | clean to 300k, ~400k intake at 0.5% loss |
+| uso (UDP_SEND_MSG_SIZE packed sends) | **28%** | plain sockets; 35.5% at 300k (2.4x cheaper than rio) |
 | uso + uro | 61% | URO never coalesces anywhere (diagnosed) -> per-packet sends |
 
 Windows mirrors Linux family-for-family: stack batching (USO/GSO) >

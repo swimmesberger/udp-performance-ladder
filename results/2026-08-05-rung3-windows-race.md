@@ -19,10 +19,30 @@ rio|rio-defer|uso`, `--uro-segment <n>`), measured back to back with
 ## The matrix (32 B, bursty, 8 sender threads, 10 s runs, warmed)
 
 CPU = median loaded sample, one core. Loss = sender vs forwarder rx.
-Two runs: first with Defender real-time protection + firewall ON, then
-(same day, published set) with both OFF.
+Three runs: Defender ON + Realtek driver 1125.26.50.2025; Defender OFF +
+same driver; Defender OFF + driver 10.80.20.407 (published set, below).
+NIC hygiene re-audited and restored after the driver update (it reset
+ReceiveBuffers/GreenEthernet/GigaLite; see ENVIRONMENT.md).
 
-Defender OFF (the published race):
+Defender OFF, driver 10.80.20.407 (the published race):
+
+| Offered | rio | rio-defer | uso | uso+uro-32 |
+| ------- | --- | --------- | --- | ---------- |
+| 150,000 | 0.00% / 38.8% | 0.00% / 37.4% | 0.13% / 17.1% | - |
+| 200,000 | 0.00% / 55.5% | 0.00% / 49.8% | 0.01% / 28.0% | 0.00% / 60.8% |
+| 250,000 | 0.00% / 77.8% | 0.00% / 57.3% | 0.00% / 35.5% | - |
+| 300,000 | 0.10% / 85.3% | 0.00% / 70.0% | 0.00% / 35.5% | 0.43% / 92.7% |
+| 400,000 | - | 0.47% / 91.2% | 1.29% / 52.3% | 15.61% / 98.9% |
+
+**Driver A/B**: the 10.80 driver left the socket/ring engines within
+variance of the 1125 driver (rio 54.1 -> 55.5, defer 46.6 -> 49.8 at
+200k) but improved USO by ~9 points everywhere (37.3 -> 28.0 at 200k,
+51.6 -> 35.5 at 300k, 76.0 -> 52.3 at 400k). Not hardware USO:
+`Get-NetAdapterUso` still lists nothing, so segmentation stays in the
+stack; the driver just services the large segmented NBL send path more
+cheaply. At 300k, USO is now 2.4x cheaper than per-request RIO.
+
+Defender OFF, driver 1125.26.50.2025:
 
 | Offered | rio | rio-defer | uso | uso+uro-32 |
 | ------- | --- | --------- | --- | ---------- |
@@ -32,7 +52,7 @@ Defender OFF (the published race):
 | 300,000 | 0.03% / 84.1% | 0.00% / 67.0% | 0.00% / 51.6% | 0.00% / 93.3% |
 | 400,000 | - | 0.29% / 90.1% | 0.33% / 76.0% | 17.87% / 99.5% |
 
-Defender ON (earlier same-day run, kept for the A/B):
+Defender ON, driver 1125.26.50.2025 (kept for the Defender A/B):
 
 | Offered | rio | rio-defer | uso | uso+uro-32 |
 | ------- | --- | --------- | --- | ---------- |
@@ -52,21 +72,20 @@ up everywhere (defer 1.86% -> 0.29% at 400k, uso 1.36% -> 0.33%).
 ## Findings
 
 1. **Deferred commits (RIO_MSG_DEFER + one RIO_MSG_COMMIT_ONLY per dequeue
-   batch) save 15-20% of the engine** (Defender off: 54.1 -> 46.6 at
-   200k, 84.1 -> 67.0 at 300k), clean through 300k, intake ~400k at 0.29%
+   batch) save 10-20% of the engine** (published set: 55.5 -> 49.8 at
+   200k, 85.3 -> 70.0 at 300k), clean through 300k, intake ~400k at 0.5%
    loss. The engine change is a flag on RIOReceiveEx/RIOSendEx plus two
    commit calls. This is transition batching (the mmsg shape) done inside
    RIO: request insertion becomes a pure user-mode ring write.
-2. **USO (UDP_SEND_MSG_SIZE) takes another third off**: 37.3% vs 54.1% at
-   200k, 51.6% vs 84.1% at 300k, and 76.0% at 400k while forwarding 99.7%
-   of offered. Same family win as Linux GSO, now measured on Windows, from
-   a plain blocking socket loop (~100 lines of ordinary C#, two
-   setsockopts, no interop). Send path: pack up to 64 equal-size payloads,
-   one send per batch, stack segments once per batch (loopback smoke
-   confirmed true re-segmentation: 500 packed payloads arrive as 500
-   distinct 32 B datagrams). Under Defender the gap was larger still
-   (31.1 vs 66.3): the per-packet engines pay the filtering tax, USO
-   mostly does not.
+2. **USO (UDP_SEND_MSG_SIZE) halves the engine and keeps going**: 28.0%
+   vs 55.5% at 200k, 35.5% vs 85.3% at 300k (2.4x), and 52.3% at 400k
+   while forwarding 98.7% of offered. Same family win as Linux GSO, now
+   measured on Windows, from a plain blocking socket loop (~100 lines of
+   ordinary C#, two setsockopts, no interop). Send path: pack up to 64
+   equal-size payloads, one send per batch, stack segments once per batch
+   (loopback smoke confirmed true re-segmentation: 500 packed payloads
+   arrive as 500 distinct 32 B datagrams). The ordering held in every
+   configuration tried (Defender on/off, both drivers).
 3. **URO (UDP_RECV_MAX_COALESCED_SIZE) never engaged, and this is now
    diagnosed, not guessed.** The option is accepted, and
    `netsh int udp show global` reports "Receive Offload State: enabled",
