@@ -33,10 +33,31 @@ occasional suspensions between bursts), unattributed in detail.
 
 ## Consequence for published numbers
 
-Rung 1's per-datagram figure on the wire is **~245 B** (the loop itself
-200 B); 360 B describes the plain overloads the benchmark happens to
-call. The blog post and SUMMARY.md now carry ~245 B. The rung 1 vs
-rung 2 verdict is unchanged (tens of MB/s of garbage vs zero); what the
-discrepancy adds is its own lesson: the benchmark quietly measured a
-different API shape than the shipped loop, caught by dividing one
-counter by another.
+The rung 1 vs rung 2 verdict is unchanged (tens of MB/s of garbage vs
+zero); what the discrepancy adds is its own lesson: the benchmark
+quietly measured a different API shape than the shipped loop, caught by
+dividing one counter by another. Superseded the same day by the fix
+below: the benchmark now measures the forwarder's overloads directly.
+
+## Same day: benchmark standardized on the forwarder's overloads
+
+`ReceivePathBenchmarks` now passes a `CancellationToken` on every call,
+so it measures the exact overloads the forwarders ship. Re-measured
+(BenchmarkDotNet v0.15.8, .NET 10.0.10, PayloadSize 32):
+
+| Method | Mean | Allocated |
+| --- | --- | --- |
+| Rung1_UdpClient | 4.708 us | 272 B |
+| Rung2_RawSocket | 4.712 us | 72 B |
+| Rung2_SendOnly | 4.662 us | 0 |
+| Rung2_ReceiveOnly | 4.776 us | 72 B |
+| Rung2_FullySynchronous | 4.609 us | 0 |
+| Rung1_UdpClient_Loop | 4.415 us | 200 B |
+| Rung2_RawSocket_Loop | 4.338 us | 0 |
+
+Consistent with the AllocProbe result: 272 = 200 + the 72 B
+benchmark-method state-machine box, and the looped rung 1 reads 200 B
+exactly. Means run ~5-10% above the earlier session's run (loopback
+timing noise; allocation numbers are exact). Published figures are now
+272/200 B for rung 1, 72/0 B for rung 2, with ~200 B/datagram as rung
+1's summary number.

@@ -10,10 +10,16 @@ namespace MicroBenchmarks;
 /// socket's own loopback endpoint and receiving it back. Loopback
 /// timing says nothing about wire performance; the number that matters
 /// here is Allocated per operation.
+///
+/// Every call passes a CancellationToken so the benchmark hits the exact
+/// overloads the forwarders call. UdpClient's parameterless overloads are
+/// a different, Task-returning family that allocates ~160 B more per
+/// datagram (see results/2026-08-05-rung1-alloc-overloads.md).
 /// </summary>
 [MemoryDiagnoser]
 public class ReceivePathBenchmarks
 {
+    private CancellationTokenSource _cts = null!;
     private UdpClient _udpClient = null!;
     private IPEndPoint _udpClientSelf = null!;
 
@@ -30,6 +36,7 @@ public class ReceivePathBenchmarks
     [GlobalSetup]
     public void Setup()
     {
+        _cts = new CancellationTokenSource();
         _payload = new byte[PayloadSize];
         _receiveBuffer = GC.AllocateArray<byte>(65536, pinned: true);
 
@@ -47,28 +54,29 @@ public class ReceivePathBenchmarks
     {
         _udpClient.Dispose();
         _rawSocket.Dispose();
+        _cts.Dispose();
     }
 
     [Benchmark(Baseline = true)]
     public async Task<int> Rung1_UdpClient()
     {
-        await _udpClient.SendAsync(_payload, _udpClientSelf);
-        UdpReceiveResult result = await _udpClient.ReceiveAsync();
+        await _udpClient.SendAsync(_payload, _udpClientSelf, _cts.Token);
+        UdpReceiveResult result = await _udpClient.ReceiveAsync(_cts.Token);
         return result.Buffer.Length;
     }
 
     [Benchmark]
     public async Task<int> Rung2_RawSocket()
     {
-        await _rawSocket.SendToAsync(_payload, SocketFlags.None, _rawSocketSelf);
-        return await _rawSocket.ReceiveFromAsync(_receiveBuffer, SocketFlags.None, _sender);
+        await _rawSocket.SendToAsync(_payload, SocketFlags.None, _rawSocketSelf, _cts.Token);
+        return await _rawSocket.ReceiveFromAsync(_receiveBuffer, SocketFlags.None, _sender, _cts.Token);
     }
 
     /// <summary>Send half of rung 2, to locate the residual allocation.</summary>
     [Benchmark]
     public async Task Rung2_SendOnly()
     {
-        await _rawSocket.SendToAsync(_payload, SocketFlags.None, _rawSocketSelf);
+        await _rawSocket.SendToAsync(_payload, SocketFlags.None, _rawSocketSelf, _cts.Token);
         // drain synchronously so the socket buffer does not fill
         _rawSocket.ReceiveFrom(_receiveBuffer, SocketFlags.None, _sender);
     }
@@ -78,7 +86,7 @@ public class ReceivePathBenchmarks
     public async Task<int> Rung2_ReceiveOnly()
     {
         _rawSocket.SendTo(_payload, SocketFlags.None, _rawSocketSelf);
-        return await _rawSocket.ReceiveFromAsync(_receiveBuffer, SocketFlags.None, _sender);
+        return await _rawSocket.ReceiveFromAsync(_receiveBuffer, SocketFlags.None, _sender, _cts.Token);
     }
 
     /// <summary>
@@ -106,8 +114,8 @@ public class ReceivePathBenchmarks
         int last = 0;
         for (int i = 0; i < Batch; i++)
         {
-            await _udpClient.SendAsync(_payload, _udpClientSelf);
-            UdpReceiveResult result = await _udpClient.ReceiveAsync();
+            await _udpClient.SendAsync(_payload, _udpClientSelf, _cts.Token);
+            UdpReceiveResult result = await _udpClient.ReceiveAsync(_cts.Token);
             last = result.Buffer.Length;
         }
         return last;
@@ -119,8 +127,8 @@ public class ReceivePathBenchmarks
         int last = 0;
         for (int i = 0; i < Batch; i++)
         {
-            await _rawSocket.SendToAsync(_payload, SocketFlags.None, _rawSocketSelf);
-            last = await _rawSocket.ReceiveFromAsync(_receiveBuffer, SocketFlags.None, _sender);
+            await _rawSocket.SendToAsync(_payload, SocketFlags.None, _rawSocketSelf, _cts.Token);
+            last = await _rawSocket.ReceiveFromAsync(_receiveBuffer, SocketFlags.None, _sender, _cts.Token);
         }
         return last;
     }
