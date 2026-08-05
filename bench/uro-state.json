@@ -1,0 +1,12 @@
+{
+    "Adapter":  "Ethernet 9",
+    "Bindings":  [
+                     "ms_tcpip"
+                 ],
+    "DisabledAdapters":  [
+                             "vEthernet (Default Switch)",
+                             "vEthernet (FSE HostVnic)"
+                         ],
+    "WinNatWasRunning":  true,
+    "SavedUtc":  "2026-08-05T14:40:21.4967047Z"
+}

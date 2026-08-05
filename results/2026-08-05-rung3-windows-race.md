@@ -156,10 +156,20 @@ up everywhere (defer 1.86% -> 0.29% at 400k, uso 1.36% -> 0.33%).
    software feature. TCP RSC was coalescing in the same trace
    (RSC = 1(TRUE) CoalescedSegCount = 2), its mask being 0.
 
+   RUNTIME CLEARING DOES NOT WORK (tested, bench/fix-uro.ps1 -Apply):
+   with winnat stopped AND both Hyper-V vnics (Default Switch, FSE
+   HostVnic) disabled, a fresh trace still reads mask = 48 and the
+   probe still coalesces nothing (300,000 receives, all 1200 B). The
+   IPSNPI clients register with tcpip at boot; stopping the service and
+   disabling the adapters afterwards does not retract the registration.
+   Clearing it therefore needs the Hyper-V/WSL features themselves
+   disabled plus a reboot, or a machine that never had them.
+
    PUBLISHED CLAIM: software URO is real and was enabled on this
    interface; a virtualization feature vetoed it system-wide with no
-   API surfacing the fact. To measure URO's actual value, use a
-   machine without WSL/Hyper-V (mask must read 0).
+   API surfacing the fact, and the veto survives everything short of
+   uninstalling the feature and rebooting. To measure URO's actual
+   value, use a machine without WSL/Hyper-V (mask must read 0).
    Receive-side batching remains the open gap on Windows: recv syscalls
    are still per-packet in the uso engine (its 400k loss at 59% CPU is a
    receive-side cliff, not a CPU cliff).

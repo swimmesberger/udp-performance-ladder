@@ -87,8 +87,21 @@ function Show-State {
 
 if ($Restore) {
     if (-not (Test-Elevated)) { throw 'run elevated' }
-    if (-not (Test-Path $stateFile)) { throw "no saved state at $stateFile" }
-    $s = Get-Content $stateFile | ConvertFrom-Json
+    if (Test-Path $stateFile) {
+        $s = Get-Content $stateFile | ConvertFrom-Json
+    } elseif (Test-Path $legacyFile) {
+        # An earlier ad-hoc strip left only a bindings list behind; restore
+        # from that so a half-stripped adapter is never stranded.
+        Write-Output "no $stateFile; restoring from legacy strip state"
+        $s = [pscustomobject]@{
+            Adapter          = $Adapter
+            Bindings         = @(Get-Content $legacyFile | ConvertFrom-Json)
+            DisabledAdapters = @()
+            WinNatWasRunning = $true
+        }
+    } else {
+        throw "no saved state at $stateFile (nothing to restore)"
+    }
 
     foreach ($id in $s.Bindings) {
         try { Enable-NetAdapterBinding -Name $s.Adapter -ComponentID $id -ErrorAction Stop
