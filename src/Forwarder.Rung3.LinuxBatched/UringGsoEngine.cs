@@ -19,6 +19,8 @@ internal static unsafe class UringGsoEngine
 {
     private const long SysIoUringSetup = 425;
     private const long SysIoUringEnter = 426;
+    private const long SysIoUringRegister = 427;
+    private const uint RegisterIowqMaxWorkers = 19; // IORING_REGISTER_IOWQ_MAX_WORKERS, 5.15+
     private const uint EnterGetEvents = 1;
     private const byte OpSendMsg = 9;
     private const byte OpRecvMsg = 10;
@@ -80,6 +82,20 @@ internal static unsafe class UringGsoEngine
         {
             sqSize = cqSize;
         }
+        // recvmsg with control data (the GRO cmsg) is punted to io-wq, whose
+        // worker pool is unbounded for network ops: measured mid-run, this
+        // engine grew 12,739 iou-wrk threads and burned an extra core. Cap
+        // the pool (bounded, unbounded) so the punt costs a context switch
+        // instead of a thread explosion.
+        uint* maxWorkers = stackalloc uint[2];
+        maxWorkers[0] = 1;
+        maxWorkers[1] = 1;
+        if (Libc.Syscall(SysIoUringRegister, ringFd, RegisterIowqMaxWorkers, (long)maxWorkers, 2, 0, 0) < 0)
+        {
+            Console.Error.WriteLine(
+                $"warning: IORING_REGISTER_IOWQ_MAX_WORKERS failed (errno {Marshal.GetLastWin32Error()}); io-wq stays unbounded");
+        }
+
         byte* sqBase = MapRing((int)ringFd, sqSize, OffSqRing);
         byte* cqBase = single ? sqBase : MapRing((int)ringFd, cqSize, OffCqRing);
         var sqes = (IoUringSqe*)MapRing((int)ringFd, setup.SqEntries * (nuint)sizeof(IoUringSqe), OffSqes);

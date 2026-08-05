@@ -60,12 +60,20 @@ CPU at offered rate (% of one core) / rx loss where notable:
    robustness (0.1% at 300k) but not CPU (71.2): the ring's own overhead
    dominates. The "io_uring+GSO sweet spot" claim does not hold for this
    workload on this rig.
-5. **io_uring + GRO cmsgs trips the worker pool**: uring-gso-gro burns
-   122-137% CPU on a single-threaded engine; recvmsg with control data
-   evidently leaves the fast path and lands on io-wq kernel workers
-   (extra threads billed to the process). Zero loss, one hidden core.
-   This reproduces the io_uring-UDP worker-pool pain Cloudflare has
-   described publicly.
+5. **io_uring + GRO cmsgs trips the worker pool: DIAGNOSED AND FIXED.**
+   Unfixed, uring-gso-gro burned 122-137% CPU on a single-threaded
+   engine. Mid-run thread census (bench/census-in-vm.sh): **12,739
+   iou-wrk-* kernel worker threads** inside the process, vs exactly 1
+   for uring-gso without control data. Mechanism: recvmsg carrying
+   msg_control is punted off io_uring's polled fast path onto io-wq,
+   whose pool is unbounded for network ops (Cloudflare's
+   missing-manuals-io_uring-worker-pool post documents the pool
+   anatomy; they saw 4,096 threads, one per in-flight request). Fix:
+   IORING_REGISTER_IOWQ_MAX_WORKERS(1,1) at ring setup -> census reads
+   1 worker, engine measures 63.1% @200k / 80.9% @300k at 0.04% loss.
+   Post-fix, GRO helps the ring (63.1 < uring-gso 72.1) but every op
+   still detours through the worker, so it stays 2.6x behind
+   mmsg+GSO+GRO. The ring's fast path and offload cmsgs do not compose.
 6. **Two Windows survival traps** (exposed by firewall-off + new driver;
    fixed in all engines, see commit d77424e): inbound ICMP
    port-unreachable kills a receive loop unless SIO_UDP_CONNRESET is
