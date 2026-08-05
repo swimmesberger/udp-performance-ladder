@@ -59,10 +59,18 @@ switch (engine)
         IoUringEngine.Run(options, stats, cts.Token);
         break;
     case "gso":
-        GsoEngine.Run(options, stats, gro: false, cts.Token);
+        GsoEngine.Run(options, stats, gro: false, plainRx: false, cts.Token);
         break;
     case "gso-gro":
-        GsoEngine.Run(options, stats, gro: true, cts.Token);
+        GsoEngine.Run(options, stats, gro: true, plainRx: false, cts.Token);
+        break;
+    // Symmetric twins of the Windows USO engine: one datagram per receive
+    // syscall, stack batching on the send side only.
+    case "gso-plainrx":
+        GsoEngine.Run(options, stats, gro: false, plainRx: true, cts.Token);
+        break;
+    case "gso-gro-plainrx":
+        GsoEngine.Run(options, stats, gro: true, plainRx: true, cts.Token);
         break;
     case "uring-gso":
         UringGsoEngine.Run(options, stats, gro: false, cts.Token);
@@ -74,7 +82,9 @@ switch (engine)
         AfPacketEngine.Run(options, stats, cts.Token);
         break;
     default:
-        Console.Error.WriteLine($"unknown engine '{engine}' (mmsg | uring | gso | gso-gro | uring-gso | uring-gso-gro | afpacket)");
+        Console.Error.WriteLine(
+            $"unknown engine '{engine}' (mmsg | uring | gso | gso-gro | gso-plainrx | " +
+            "gso-gro-plainrx | uring-gso | uring-gso-gro | afpacket)");
         return 1;
 }
 return 0;

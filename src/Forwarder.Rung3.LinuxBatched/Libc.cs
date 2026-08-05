@@ -29,6 +29,9 @@ internal static unsafe partial class Libc
     [LibraryImport("libc", EntryPoint = "recvmmsg", SetLastError = true)]
     public static partial int RecvMmsg(int fd, Mmsghdr* msgvec, uint vlen, int flags, void* timeout);
 
+    [LibraryImport("libc", EntryPoint = "recvmsg", SetLastError = true)]
+    public static partial nint RecvMsg(int fd, Msghdr* msg, int flags);
+
     [LibraryImport("libc", EntryPoint = "sendmmsg", SetLastError = true)]
     public static partial int SendMmsg(int fd, Mmsghdr* msgvec, uint vlen, int flags);
 

@@ -48,7 +48,8 @@ internal sealed class UsoForwarder
         if (_uroSegment > 0)
         {
             rx.SetSocketOption(SocketOptionLevel.Udp,
-                (SocketOptionName)UdpRecvMaxCoalescedSize, MaxSegments * MaxDatagram);
+                (SocketOptionName)UdpRecvMaxCoalescedSize,
+                Math.Min(MaxSegments * _uroSegment, 65535));
         }
 
         var tx = new Socket[_options.Destinations.Count];
@@ -66,8 +67,17 @@ internal sealed class UsoForwarder
         int packedSegments = 0;
         int segmentSize = 0;
 
+        // Room one receive may need: a coalesced blob, or one datagram.
+        int maxReceive = _uroSegment > 0
+            ? Math.Min(MaxSegments * _uroSegment, 65535)
+            : MaxDatagram;
+
         while (!ct.IsCancellationRequested)
         {
+            if (packedSegments > 0 && packed.Length - packedBytes < maxReceive)
+            {
+                Flush(tx, txSegment, packed, ref packedBytes, ref packedSegments, segmentSize);
+            }
             int n = rx.Receive(packed.AsSpan(packedBytes), SocketFlags.None, out SocketError error);
             if (error == SocketError.WouldBlock)
             {
@@ -87,42 +97,40 @@ internal sealed class UsoForwarder
                 throw new SocketException((int)error);
             }
 
-            if (_uroSegment > 0)
+            // One receive carries one datagram, or (with URO engaged) several
+            // equal-size ones back to back with a possibly-shorter tail. Both
+            // cases feed the same packing path, so opting into URO is a
+            // superset of plain USO rather than a different engine.
+            int segment = _uroSegment > 0 ? Math.Min(_uroSegment, n) : n;
+            int whole = n / segment;
+            int tail = n - whole * segment;
+            int segmentsInReceive = whole + (tail > 0 ? 1 : 0);
+
+            for (int i = 0; i < whole; i++)
             {
-                // A coalesced blob is several equal-size datagrams back to
-                // back (a possibly-smaller tail ends the batch). Count them
-                // and forward the blob as one pre-packed USO batch.
-                int whole = n / _uroSegment;
-                int tail = n - whole * _uroSegment;
-                for (int i = 0; i < whole; i++)
-                {
-                    _stats.PacketReceived(_uroSegment);
-                }
-                if (tail > 0)
-                {
-                    _stats.PacketReceived(tail);
-                }
-                packedBytes += n;
-                packedSegments += whole + (tail > 0 ? 1 : 0);
-                segmentSize = _uroSegment;
-                Flush(tx, txSegment, packed, ref packedBytes, ref packedSegments, segmentSize);
-                continue;
+                _stats.PacketReceived(segment);
+            }
+            if (tail > 0)
+            {
+                _stats.PacketReceived(tail);
             }
 
-            _stats.PacketReceived(n);
-            if (packedSegments > 0 && n != segmentSize)
+            // A segment-size change or a full pack ends the current batch:
+            // USO needs equal-size segments. Flush, then move this receive
+            // down to start the next batch.
+            if (packedSegments > 0 &&
+                (segment != segmentSize || packedSegments + segmentsInReceive > MaxSegments))
             {
-                // Size change ends the batch: USO needs equal-size segments.
-                // Flush, then move the odd datagram down to start the next batch.
                 int oddOffset = packedBytes;
                 Flush(tx, txSegment, packed, ref packedBytes, ref packedSegments, segmentSize);
                 Buffer.BlockCopy(packed, oddOffset, packed, 0, n);
             }
-            segmentSize = n;
+            segmentSize = segment;
             packedBytes += n;
-            packedSegments++;
+            packedSegments += segmentsInReceive;
 
-            if (packedSegments >= MaxSegments)
+            // A short tail can only be the batch's last segment.
+            if (tail > 0 || packedSegments >= MaxSegments)
             {
                 Flush(tx, txSegment, packed, ref packedBytes, ref packedSegments, segmentSize);
             }

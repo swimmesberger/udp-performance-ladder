@@ -43,6 +43,53 @@ CPU at offered rate (% of one core) / rx loss where notable:
 | **mmsg + GSO + GRO** | **24.4 (0.00%)** | **32.7 (0.02%)** |
 | AF_PACKET rings | 12.5 (0.0%) | 14.9 (14.3%) |
 
+## The symmetric pairs: what the RECEIVE side is worth
+
+Added after the main campaign, because the two OSes' "stack batching"
+engines were not structural twins: the Windows USO engine receives one
+datagram per syscall, while the Linux gso engine was also getting
+recvmmsg batching for free. New lanes isolate the receive path
+(`gso-plainrx`, `gso-gro-plainrx` on Linux; a fixed URO engine on
+Windows that packs across receives instead of degenerating when
+coalescing never happens).
+
+Linux, real link, CPU @200k (all with GSO packed sends):
+
+| Receive path | CPU @200k | CPU @300k |
+| --- | --- | --- |
+| one recvmsg per datagram | 47.8% | 64.3% (5.1% loss) |
+| recvmmsg batching | 27.8% | 36.1% |
+| one recvmsg + UDP_GRO | **25.8%** | - |
+| recvmmsg + UDP_GRO | **24.4%** | 32.7% |
+
+Windows, bare metal, CPU @200k (USO packed sends, one recv per datagram):
+
+| Engine | CPU @200k | CPU @300k |
+| --- | --- | --- |
+| uso (send offload only) | 29.2% | 42.1% |
+| uso + URO opt-in | 27.7% | 43.2% |
+
+Two findings:
+
+1. **GRO alone replaces recvmmsg.** Going from per-datagram receives to
+   GRO coalescing saves 22 points (47.8 -> 25.8); going to recvmmsg
+   saves 20 (47.8 -> 27.8). Adding mmsg on top of GRO buys only 1.4
+   more, so the two are near-redundant: the receive twin does the
+   batching job by itself, and does it slightly better, because a
+   coalesced blob amortizes stack traversal as well as syscalls.
+2. **USO + URO == USO on this hardware** (27.7 vs 29.2 @200k, 43.2 vs
+   42.1 @300k: within run noise, sign flips by rate). Expected, since
+   URO never coalesces here; what it proves is that the opt-in itself
+   is free, so the earlier 60.6% "uso+uro" figure was an artifact of
+   the old engine forwarding each receive as its own batch. That row is
+   superseded; the URO opt-in is inert, not harmful.
+
+Consequence for the article's asymmetry claim: it is not just that
+Windows' URO is dark. Windows has NO receive-side batching available at
+all (no recvmmsg equivalent, URO inert), so its receive path is
+structurally pinned at one syscall per datagram, while Linux has two
+independent remedies and either one suffices.
+
 ## Findings
 
 1. **Family order confirmed under one config on both OSes**: stack

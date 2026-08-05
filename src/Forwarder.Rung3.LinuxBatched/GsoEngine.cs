@@ -39,7 +39,13 @@ internal static unsafe partial class GsoEngine
     [LibraryImport("libc", EntryPoint = "sendmsg", SetLastError = true)]
     private static partial nint SendMsg(int fd, Msghdr* msg, int flags);
 
-    public static void Run(ForwarderOptions options, ForwarderStats stats, bool gro, CancellationToken ct)
+    /// <param name="plainRx">
+    /// Receive one datagram per syscall (recvmsg) instead of batching with
+    /// recvmmsg. This is the structural twin of the Windows USO engine:
+    /// send-side stack batching only, so the two OSes' segmentation-offload
+    /// engines differ in the offload, not in how they receive.
+    /// </param>
+    public static void Run(ForwarderOptions options, ForwarderStats stats, bool gro, bool plainRx, CancellationToken ct)
     {
         int fd = Libc.CreateBoundUdpSocket(options.ListenPort, 1 << 20);
         int destinationCount = options.Destinations.Count;
@@ -96,11 +102,26 @@ internal static unsafe partial class GsoEngine
                     recvVec[i].Header.ControlLength = CmsgSpace;
                 }
             }
-            int received = Libc.RecvMmsg(fd, recvVec, BatchSize, Libc.MSG_WAITFORONE, null);
-            if (received < 0)
+            int received;
+            if (plainRx)
             {
-                if (Marshal.GetLastWin32Error() == 4) continue;
-                throw new InvalidOperationException($"recvmmsg failed: errno {Marshal.GetLastWin32Error()}");
+                nint one = Libc.RecvMsg(fd, &recvVec[0].Header, 0);
+                if (one < 0)
+                {
+                    if (Marshal.GetLastWin32Error() == 4) continue;
+                    throw new InvalidOperationException($"recvmsg failed: errno {Marshal.GetLastWin32Error()}");
+                }
+                recvVec[0].Length = (uint)one;
+                received = 1;
+            }
+            else
+            {
+                received = Libc.RecvMmsg(fd, recvVec, BatchSize, Libc.MSG_WAITFORONE, null);
+                if (received < 0)
+                {
+                    if (Marshal.GetLastWin32Error() == 4) continue;
+                    throw new InvalidOperationException($"recvmmsg failed: errno {Marshal.GetLastWin32Error()}");
+                }
             }
 
             // Effective segment size per message: the message length, unless a
