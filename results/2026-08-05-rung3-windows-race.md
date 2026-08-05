@@ -165,11 +165,33 @@ up everywhere (defer 1.86% -> 0.29% at 400k, uso 1.36% -> 0.33%).
    Clearing it therefore needs the Hyper-V/WSL features themselves
    disabled plus a reboot, or a machine that never had them.
 
-   PUBLISHED CLAIM: software URO is real and was enabled on this
-   interface; a virtualization feature vetoed it system-wide with no
-   API surfacing the fact, and the veto survives everything short of
-   uninstalling the feature and rebooting. To measure URO's actual
-   value, use a machine without WSL/Hyper-V (mask must read 0).
+   CONFIRMED BY REMOVAL (2026-08-05): Hyper-V + VirtualMachinePlatform +
+   WSL uninstalled, reboot. Mask went 48 -> 0 and coalescing began
+   immediately on the SAME Realtek NIC whose Get-NetAdapterUro reports
+   nothing, which settles that hardware capability was never the issue.
+   Same 360,000,000 bytes over the wire, before vs after:
+     mask 48: 300,000 receives, all 1200 B, 0 coalescing cmsgs
+     mask  0:  46,905 receives (-84% syscalls), 45,259 cmsgs,
+               253,096 datagrams delivered as passengers, receive sizes
+               up to 33,600 B (28 datagrams in one receive)
+
+   NDIS FILTERS EXONERATED (bench/fix-uro.ps1 -Bisect, mask 0, each
+   filter enabled in turn against live traffic): INSECURE_NPCAP,
+   vmware_bridge, MS_NDISPROT, ms_l2bridge, ms_l1vhlwf and ms_pacer are
+   ALL harmless here; coalescing continued with every one of them bound.
+   Npcap in particular contradicts nmap/npcap#737, which describes older
+   builds pinning a low NDIS version; current Npcap negotiates at
+   runtime. So the sole cause on this machine was the virtualization
+   stack, and the filter list is a historical suspect list only.
+
+   LOOPBACK CANNOT TEST URO: with mask 0, a loopback run still coalesces
+   nothing (synchronous per-send delivery presents no batch to merge).
+   Every early loopback negative was therefore uninformative, not proof.
+
+   PUBLISHED CLAIM: software URO is real, was enabled and applicable on
+   this interface all along, and was vetoed system-wide by a
+   virtualization feature with no API surfacing the fact. Uninstalling
+   Hyper-V/VMP/WSL plus a reboot is the only thing that cleared it.
    Receive-side batching remains the open gap on Windows: recv syscalls
    are still per-packet in the uso engine (its 400k loss at 59% CPU is a
    receive-side cliff, not a CPU cliff).

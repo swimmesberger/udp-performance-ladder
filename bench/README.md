@@ -57,8 +57,14 @@ people check first is the wrong question. Order of operations:
   uninstalling the features and restarting, the mask read 0 and the same
   traffic went from 300,000 single-datagram receives to 46,905 receives
   carrying up to 8 datagrams each.
-* **NDIS filters**: machine-specific, so bisect rather than guess.
-  Npcap is the documented offender ([nmap/npcap#737](https://github.com/nmap/npcap/issues/737)).
+* **NDIS filters: nothing, on this machine.** `-Bisect` enabled each
+  suspect in turn against live traffic and every one came back harmless,
+  including Npcap, whose tracker documents the opposite
+  ([nmap/npcap#737](https://github.com/nmap/npcap/issues/737)) for older
+  builds that pinned a low NDIS version. Current Npcap negotiates the
+  NDIS version at runtime, so the documented problem is fixed and the
+  filter list here is a historical suspect list, not a to-disable list.
+  Bisect on your own machine before believing either answer.
 
 ### Two traps
 
