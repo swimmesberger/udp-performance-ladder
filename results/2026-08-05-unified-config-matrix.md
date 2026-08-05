@@ -90,6 +90,15 @@ Two findings:
    since URO never coalesces here; the earlier 60.6% "uso+uro" figure
    was an artifact of the old engine forwarding each receive as its own
    batch. Superseded; the URO opt-in is inert, not harmful.
+   "Inert" decomposed into three separately-verified layers:
+   (a) STORED: getsockopt readback round-trips 0 -> 65527 -> 0, so the
+   stack records the opt-in rather than discarding it;
+   (b) NEVER EXERCISED: all probes delivered exactly one datagram per
+   receive, zero UDP_COALESCED_INFO cmsgs across 300k+ receives;
+   (c) COSTLESS: the interleaved A/B above.
+   The unobservable residue (does tcpip check the flag per-packet and
+   decline, or never look?) cannot be distinguished from user space and
+   has no consequence given (b) and (c).
 
 Consequence for the article's asymmetry claim: it is not just that
 Windows' URO is dark. Windows has NO receive-side batching available at
