@@ -26,16 +26,20 @@ predicted 60%, measured 58%).
 ## Rung 3 Windows race (2026-08-05; same-day A/B, busier machine, median
 ## stat — columns compare to each other, NOT to the table above)
 
+Defender real-time protection + firewall OFF (the published set):
+
 | Engine | CPU @ 200k | Notes |
 | --- | --- | --- |
-| rio (per-request kicks) | 66% | same engine as the published 63% row |
-| rio-defer (DEFER + COMMIT_ONLY per batch) | 52% | clean to 300k, intake ~390k |
-| uso (UDP_SEND_MSG_SIZE packed sends) | **31%** | plain sockets; 1.4% loss at 400k at 59% CPU |
-| uso + uro | 72% | URO never coalesced (no driver support) -> per-packet sends |
+| rio (per-request kicks) | 54% | same engine as the published 63% row |
+| rio-defer (DEFER + COMMIT_ONLY per batch) | 47% | clean to 300k, ~400k intake at 0.3% loss |
+| uso (UDP_SEND_MSG_SIZE packed sends) | **37%** | plain sockets; 0.3% loss at 400k at 76% CPU |
+| uso + uro | 61% | URO never coalesces anywhere (diagnosed) -> per-packet sends |
 
 Windows mirrors Linux family-for-family: stack batching (USO/GSO) >
-transition batching (defer/mmsg) > per-request ring calls. See
-2026-08-05-rung3-windows-race.md.
+transition batching (defer/mmsg) > per-request ring calls. Bonus A/B:
+Defender real-time protection costs per-packet engines ~10-12 points of
+a core at 200k+ and barely touches USO (the filtering stack is a
+per-packet cost too). See 2026-08-05-rung3-windows-race.md.
 
 ## Linux over the real LAN (virtualized WSL adapter — comparable only to each other)
 
