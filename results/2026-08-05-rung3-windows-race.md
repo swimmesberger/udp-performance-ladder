@@ -188,10 +188,40 @@ up everywhere (defer 1.86% -> 0.29% at 400k, uso 1.36% -> 0.33%).
    nothing (synchronous per-send delivery presents no batch to merge).
    Every early loopback negative was therefore uninformative, not proof.
 
+   AND YET IT CHANGES NOTHING FOR THIS LADDER. With URO demonstrably
+   coalescing, the interleaved A/B at 200k (3 rounds, 32 B payloads,
+   8 sender threads) still shows no resolvable difference: uso
+   21.8/18.7/17.1 vs uso+uro 18.5/21.8/20.2, deltas -3.3/+3.1/+3.1.
+   Reason found by probing the traffic profile directly:
+
+     payload   flows   result
+     32 B      8       no coalescing (300,000 receives, all 32 B)
+     32 B      1       no coalescing (300,000 receives, all 32 B)
+     64 B      1       COALESCING (16,016 receives, largest 2,048 = 32 dgrams)
+     256 B     1       COALESCING (15,211 receives, largest 8,192)
+     512 B     1       COALESCING (21,955 receives, largest 16,384 = 32 dgrams)
+     1200 B    1       COALESCING (46,905 receives, largest 33,600 = 28 dgrams)
+
+   => URO declines to coalesce 32-byte datagrams; it engages from 64 B
+   upward. It is a datagram-SIZE threshold, not a flow-count effect
+   (32 B fails single-flow too). This ladder's payload is 32 B by
+   design (smallest/hardest case), so URO cannot help it, which is a
+   property of the workload, not a defect of the feature.
+
+   Contrast worth publishing: Linux UDP_GRO DID improve the same 32 B
+   workload (gso 27.8% -> gso-gro 24.4% at 200k). Inference, not direct
+   instrumentation: the gso-gro engine only differs by opting into GRO
+   and taking a zero-copy blob path, so the gain implies GRO coalesced
+   at 32 B where Windows URO declines.
+
    PUBLISHED CLAIM: software URO is real, was enabled and applicable on
    this interface all along, and was vetoed system-wide by a
-   virtualization feature with no API surfacing the fact. Uninstalling
-   Hyper-V/VMP/WSL plus a reboot is the only thing that cleared it.
+   virtualization feature with no API surfacing the fact; uninstalling
+   Hyper-V/VMP/WSL plus a reboot cleared it. Once working it coalesces
+   aggressively (up to 32 datagrams per receive, -84% receive syscalls
+   at 1200 B) but ignores 32-byte datagrams, so this ladder's Windows
+   column stays send-side-only for a reason that has nothing to do with
+   the earlier mystery.
    Receive-side batching remains the open gap on Windows: recv syscalls
    are still per-packet in the uso engine (its 400k loss at 59% CPU is a
    receive-side cliff, not a CPU cliff).
