@@ -122,5 +122,13 @@ up everywhere (defer 1.86% -> 0.29% at 400k, uso 1.36% -> 0.33%).
   deferred on the queue. Both receives and sends support it.
 - UDP_SEND_MSG_SIZE (USO) = Windows 10 2004+; UDP_RECV_MAX_COALESCED_SIZE
   (URO) = Windows 11 24H2+, driver-dependent in practice.
+- USO has a documented kernel software fallback when the NIC lacks
+  hardware support (Intel adapter guide 29.2, "UDP Segmentation Offload";
+  matches our measurement: works on Realtek with Get-NetAdapterUso
+  empty). Every segmentation number in this project is SOFTWARE
+  segmentation: no hardware USO on the Realtek (either OS), hv_netvsc
+  does not forward NETIF_F_GSO_UDP_L4, and the container race was
+  loopback (no NIC). The GSO/USO figures are therefore the family's
+  floor; hardware-capable NICs would widen the gap.
 - Still owed: whether USO composes with RIO rings; URO on a NIC that
   supports it; io_uring multishot rematch on Linux.
