@@ -110,11 +110,27 @@ up everywhere (defer 1.86% -> 0.29% at 400k, uso 1.36% -> 0.33%).
    Get-NetOffloadGlobalSetting expose no URO knob (RSC there is TCP);
    no Tcpip\Parameters registry values match Uro/Coalesc.
    Conclusion: Get-NetAdapterUro only rules out the HARDWARE half; the
-   software half is ruled out behaviorally, at its best case. On this
-   build (26200), the net-offloads spec's "existing software URO
-   feature" does not mean a general software coalescer for opted-in
-   sockets. URO on commodity hardware = hardware feature waiting for
-   hardware.
+   software half is ruled out behaviorally, at its best case.
+
+   CAUSE INVESTIGATION (2026-08-05, later): msquic's troubleshooting
+   guide documents software URO as a real feature and lists why it goes
+   dark: receive-offload state disabled (ours: enabled), PTP
+   timestamps, WFP callouts/IPSNPI clients setting a global disable
+   mask, and incompatible NDIS drivers on the interface. Npcap's own
+   tracker (nmap/npcap#737, #70) states NDIS disables URO (and RSC)
+   when an LWF targeting an older NDIS version is bound; npcap was
+   bound to every adapter here, and WLAN 4 shows the matching RSC
+   failure reason NDISCompatibility. TESTED: unbound npcap from
+   Ethernet 9 -> Get-NetAdapterUro still empty, RSC still not
+   enumerated, and the wire probe still returned 290,399 receives of
+   exactly 1200 B with zero coalesced cmsgs. So npcap alone is not the
+   cause. Still bound and untested individually: vmware_bridge,
+   MS_NDISPROT (HTC), ms_l2bridge (the WSL mirrored-networking bridge),
+   ms_l1vhlwf. Definitive attribution needs a TCPIP Full.Verbose trace
+   (look for "URO SCU received. SegCount=..."), not user-space probing.
+   PUBLISHED CLAIM: URO is a real software feature that an ordinary
+   desktop stack can silently disable; the opt-in still succeeds and
+   nothing reports the failure. Not "waiting for hardware".
    Receive-side batching remains the open gap on Windows: recv syscalls
    are still per-packet in the uso engine (its 400k loss at 59% CPU is a
    receive-side cliff, not a CPU cliff).
