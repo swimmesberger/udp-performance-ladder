@@ -72,6 +72,14 @@ internal sealed class UsoForwarder
             ? Math.Min(MaxSegments * _uroSegment, 65535)
             : MaxDatagram;
 
+        // One USO send carries at most 64 KB in total, so large payloads cap
+        // the batch below MaxSegments (64 x 1200 B would be 76,800).
+        int maxSegments = MaxSegments;
+        if (_uroSegment > 0)
+        {
+            maxSegments = Math.Max(1, Math.Min(MaxSegments, 65535 / _uroSegment));
+        }
+
         while (!ct.IsCancellationRequested)
         {
             if (packedSegments > 0 && packed.Length - packedBytes < maxReceive)
@@ -119,7 +127,7 @@ internal sealed class UsoForwarder
             // USO needs equal-size segments. Flush, then move this receive
             // down to start the next batch.
             if (packedSegments > 0 &&
-                (segment != segmentSize || packedSegments + segmentsInReceive > MaxSegments))
+                (segment != segmentSize || packedSegments + segmentsInReceive > maxSegments))
             {
                 int oddOffset = packedBytes;
                 Flush(tx, txSegment, packed, ref packedBytes, ref packedSegments, segmentSize);
@@ -130,7 +138,7 @@ internal sealed class UsoForwarder
             packedSegments += segmentsInReceive;
 
             // A short tail can only be the batch's last segment.
-            if (tail > 0 || packedSegments >= MaxSegments)
+            if (tail > 0 || packedSegments >= maxSegments)
             {
                 Flush(tx, txSegment, packed, ref packedBytes, ref packedSegments, segmentSize);
             }

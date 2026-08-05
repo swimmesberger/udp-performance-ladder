@@ -165,6 +165,14 @@ up everywhere (defer 1.86% -> 0.29% at 400k, uso 1.36% -> 0.33%).
    Clearing it therefore needs the Hyper-V/WSL features themselves
    disabled plus a reboot, or a machine that never had them.
 
+   VBS IS NOT THE CAUSE (tested 2026-08-05, after the uninstall):
+   Win32_DeviceGuard reports VirtualizationBasedSecurityStatus = 2
+   (running) and Win32_ComputerSystem.HypervisorPresent = True, while
+   URO coalesces normally. So a hypervisor being present does not set
+   the mask; the WSL/Hyper-V/container FEATURES and their IPSNPI clients
+   (winnat, FSE) do. Scope of the finding is "what you installed", not
+   "how your machine boots".
+
    CONFIRMED BY REMOVAL (2026-08-05): Hyper-V + VirtualMachinePlatform +
    WSL uninstalled, reboot. Mask went 48 -> 0 and coalescing began
    immediately on the SAME Realtek NIC whose Get-NetAdapterUro reports

@@ -25,6 +25,7 @@ WS_IP="${WS_IP:-192.168.178.143}"   # workstation LAN IP (forwarder listens here
 NAS_IP="${NAS_IP:-192.168.178.41}"  # NAS LAN IP (sink runs here, port 6000)
 DURATION="${DURATION:-10}"
 THREADS="${THREADS:-4}"             # 4 for throttled ladders; 8+ for ceiling probes
+SIZE="${SIZE:-32}"                  # payload bytes; 32 is the ladder's hard case
 
 EXE="$1"; LABEL="$2"; shift 2
 
@@ -43,13 +44,13 @@ for RATE in "$@"; do
   # the forwarder counters are baselined afterwards so warmup loss cannot
   # contaminate the measured window.
   curl -s -X POST "$API/runs" -H 'Content-Type: application/json' \
-    -d "{\"target\":\"$WS_IP:5000\",\"size\":32,\"rate\":$RATE,\"sendDurationSeconds\":3,\"threads\":$THREADS,\"sinkPort\":6000,\"sinkThreads\":4}" \
+    -d "{\"target\":\"$WS_IP:5000\",\"size\":$SIZE,\"rate\":$RATE,\"sendDurationSeconds\":3,\"threads\":$THREADS,\"sinkPort\":6000,\"sinkThreads\":4}" \
     > /dev/null
   sleep 11
   BASE=$(fwd_totals); RX0=$(echo "$BASE" | awk '{print $3}'); TX0=$(echo "$BASE" | awk '{print $5}')
 
   ID=$(curl -s -X POST "$API/runs" -H 'Content-Type: application/json' \
-    -d "{\"target\":\"$WS_IP:5000\",\"size\":32,\"rate\":$RATE,\"sendDurationSeconds\":$DURATION,\"threads\":$THREADS,\"sinkPort\":6000,\"sinkThreads\":4}" \
+    -d "{\"target\":\"$WS_IP:5000\",\"size\":$SIZE,\"rate\":$RATE,\"sendDurationSeconds\":$DURATION,\"threads\":$THREADS,\"sinkPort\":6000,\"sinkThreads\":4}" \
     | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
 
   sleep $((DURATION + 8))
